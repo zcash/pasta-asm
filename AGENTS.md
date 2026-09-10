@@ -67,6 +67,32 @@ from source on a nightly toolchain instead of using the sysroot (`cargo +nightly
 that `cargo tree` lists nothing but the crate. Keep it that way; a dependency needs a reason
 stated in its commit.
 
+## The Lean Formalization
+
+`lean/` is a Lake package (`PastaAArch64Asm`) that models the routines formally and
+contributes to assuring their correctness; see `lean/README.md` for the trust story, the
+theorems and their caveats, and how those theorems are proven. Build it from that directory
+with the elan-managed `lake` for its `lean-toolchain` (a `lake` of another Lean version
+corrupts the shared `.lake` cache):
+
+```sh
+cd lean
+lake exe cache get          # Mathlib's prebuilt oleans, once
+lake build --wfail          # warnings fail the build, as in CI
+cd .. && lean/scripts/check.sh   # regenerate the transcription and check the skeletons
+```
+
+- **`Transcription.lean` and `Vectors.lean` are generated** by `lean/scripts/gen.py` from the
+  `asm!` blocks in `src/aarch64.rs` and the vectors file. Never edit them by hand; change the
+  generator or its inputs and regenerate. `Compositions.lean` is hand-written and mirrors the Rust
+  of `sqr_n_mul` and `from_mont`; a change to either changes both.
+- **In `Spec.lean`, the generated skeleton lines are not edited either.** Only the theorem
+  statements and the `-- BEGIN ... -- END` annotation blocks are hand-written; `gen.py
+  --check-spec` requires the rest to be the current skeleton. A change to a block regenerates
+  the skeleton, and the annotations are then moved to their new places.
+- **No `sorry`, no `native_decide`, no new axioms.** The nanoda re-check permits only the
+  three standard axioms; concrete facts are checked by `decide +kernel`.
+
 ## Code Conventions
 
 - **Preserve constant-time behaviour.** No secret-dependent branches or memory accesses in the

@@ -43,6 +43,16 @@ On AArch64, `cargo test --release` runs known-answer tests of the four entry poi
 fields; on other targets there is nothing to test. `pasta_curves` tests the backend against
 its portable arithmetic when its `aarch64-asm` feature is enabled.
 
+## Formal verification
+
+`lean/` holds a Lean 4 development that models the routines formally and contributes to assuring
+their correctness: an instruction-level model, with proofs for the multiplication block under each
+of its two operand contracts and for the conversion out of Montgomery form for any input, and with
+the squaring block transcribed and checked against hardware vectors but not yet proved. The
+transcription is generated from the crate's own inline blocks, CI regenerates and diffs it, and an
+independent implementation of the Lean kernel re-checks the build. See
+[`lean/README.md`](lean/README.md).
+
 ## License
 
 This crate is licensed under the Apache License, Version 2.0 only ([LICENSE](LICENSE)). The
