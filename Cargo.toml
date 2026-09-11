@@ -9,10 +9,5 @@ repository = "https://github.com/zcash/pasta-aarch64-asm"
 readme = "README.md"
 categories = ["cryptography", "no-std::no-alloc"]
 keywords = ["pasta", "pallas", "vesta", "montgomery", "aarch64"]
-build = "build.rs"
 
 [dependencies]
-
-[build-dependencies]
-# Assembles `src/asm/pasta_mul-armv8.S` on Apple AArch64; a no-op elsewhere.
-cc = "1"

@@ -8,26 +8,25 @@
 
 //! Apple AArch64 assembly backend for the Pasta fields.
 //!
-//! Montgomery multiplication and squaring are implemented as inline `asm!`
-//! blocks below; the fused repeated-squaring chain and the canonical-form
-//! conversion are in `src/asm/pasta_mul-armv8.S` and are reached through
-//! `extern "C"`.
+//! Montgomery multiplication and squaring are inline `asm!` blocks below. The
+//! repeated-squaring chain and the conversion out of Montgomery form are
+//! compositions of them, so the crate contains no assembled file and needs no
+//! build script.
 //!
 //! The inline blocks are register-renamed transcriptions of the upstream
 //! Semolina v0.1.4 routines (`mul_mont_pasta`, and the squaring loop body of
-//! the vendored `sqr_n_mul_mont_pasta`), with rhs limbs and the modulus
-//! constants supplied in registers instead of loaded from memory. The
-//! per-instruction comments are carried over from the assembly routines they
-//! transcribe. Because the operands are
-//! ordinary register operands and the blocks are declared
-//! `options(pure, nomem, nostack)`, LLVM inlines the wrappers into callers
-//! and keeps field values in registers between operations — there is no
-//! call, pointer, or ABI-clobber traffic per field operation.
+//! `sqr_n_mul_mont_pasta`), with rhs limbs and the modulus constants supplied
+//! in registers instead of loaded from memory. The per-instruction comments
+//! are carried over from the assembly routines they transcribe. Because the
+//! operands are ordinary register operands and the blocks are declared
+//! `options(pure, nomem, nostack)`, LLVM inlines the wrappers into callers and
+//! keeps field values in registers between operations — there is no call,
+//! pointer, or ABI-clobber traffic per field operation.
 //!
-//! Like the assembly file, the arithmetic relies on the shared Pasta modulus
-//! shape: `modulus[2] = 0` and `modulus[3] = 2^62` (materialized inline as an
-//! immediate). Only `modulus[0]`, `modulus[1]`, and `inv` vary between Fp
-//! and Fq, so a single implementation serves both fields.
+//! The arithmetic relies on the shared Pasta modulus shape: `modulus[2] = 0`
+//! and `modulus[3] = 2^62` (materialized inline as an immediate). Only
+//! `modulus[0]`, `modulus[1]`, and `inv` vary between Fp and Fq, so a single
+//! implementation serves both fields.
 //!
 //! Canonicity contract (same as the assembly): `rhs` in `mul` and the input
 //! of `square` must be canonical (below the modulus). `lhs` in `mul` may be
@@ -66,17 +65,18 @@
 //! construction; `mul` and `square` debug-assert the precondition so a future
 //! caller that breaks it fails loudly under test instead of silently.
 //!
-//! There are no branches and no memory accesses inside the blocks, so the
-//! code is constant-time.
+//! There are no branches and no memory accesses inside the blocks, and the
+//! repeated-squaring loop branches only on its public count, so the code is
+//! constant-time.
 //!
 //! # Availability
 //!
 //! The backend exists only for `target_arch = "aarch64"` with
 //! `target_vendor = "apple"`. On every other target this crate is empty, so a
 //! consumer gates its use on the same `cfg` and falls back to portable
-//! arithmetic elsewhere. Building on Apple AArch64 assembles
-//! `src/asm/pasta_mul-armv8.S` through the `cc` crate, so a C toolchain is
-//! required there.
+//! arithmetic elsewhere. Nothing is assembled at build time: the blocks are
+//! compiled by the Rust toolchain, so no C toolchain is needed, and the crate
+//! is `no_std` with no dependencies.
 //!
 //! # Provenance and license
 //!
@@ -95,23 +95,6 @@ mod tests;
 /// Four little-endian 64-bit limbs, least significant first: a field element
 /// (in Montgomery form, or canonical after [`from_mont`]) or a modulus.
 pub type Limbs = [u64; 4];
-
-extern "C" {
-    fn pasta_curves_sqr_n_mul_mont_pasta(
-        out: *mut Limbs,
-        value: *const Limbs,
-        count: usize,
-        rhs: *const Limbs,
-        modulus: *const Limbs,
-        inv: u64,
-    );
-    fn pasta_curves_from_mont_pasta(
-        out: *mut Limbs,
-        value: *const Limbs,
-        modulus: *const Limbs,
-        inv: u64,
-    );
-}
 
 /// Whether `value < modulus` as little-endian 256-bit integers.
 #[inline(always)]
@@ -544,30 +527,23 @@ pub fn square(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
 }
 
 /// Squares a canonical Montgomery residue `count` times, then multiplies the
-/// result by the canonical Montgomery residue `rhs`, keeping the accumulator
-/// in registers throughout.
+/// result by the canonical Montgomery residue `rhs`. Each step is one of the
+/// inline blocks, which the compiler inlines, so the accumulator stays in
+/// registers throughout. A `count` of zero is just the multiplication.
 #[inline]
 pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    // The assembly decrements the count before testing it, so a zero count
-    // would wrap around and effectively never terminate.
-    assert!(count >= 1);
-    let mut out = Limbs::default();
-    // SAFETY: All pointers refer to four initialized `u64` limbs for the
-    // duration of the call. The backend writes exactly four limbs to `out`.
-    unsafe {
-        pasta_curves_sqr_n_mul_mont_pasta(&mut out, value, count, rhs, modulus, inv);
+    let mut acc = *value;
+    for _ in 0..count {
+        acc = square(&acc, modulus, inv);
     }
-    out
+    mul(&acc, rhs, modulus, inv)
 }
 
-/// Converts a canonical Montgomery residue into its canonical integer.
+/// Converts a Montgomery residue into its canonical integer,
+/// `value * 2^-256 mod p`, as a Montgomery multiplication by one. Any
+/// four-limb `value` is accepted: `1` is canonical, and its limbs satisfy the
+/// bound that the crate docs require of `rhs` for an unreduced `lhs`.
 #[inline]
 pub fn from_mont(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    let mut out = Limbs::default();
-    // SAFETY: All pointers refer to four initialized `u64` limbs for the
-    // duration of the call. The backend writes exactly four limbs to `out`.
-    unsafe {
-        pasta_curves_from_mont_pasta(&mut out, value, modulus, inv);
-    }
-    out
+    mul(value, &[1, 0, 0, 0], modulus, inv)
 }

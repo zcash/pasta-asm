@@ -3,11 +3,10 @@
 > This file is read by AI coding agents (Claude Code, GitHub Copilot, Cursor, Devin, etc.).
 > It provides project context and contribution policies.
 
-This crate is the Apple AArch64 assembly backend for the Pasta field arithmetic of
-`pasta_curves`: Montgomery multiplication, squaring, a fused repeated-squaring chain, and
-conversion out of Montgomery form, as inline `asm!` blocks and one assembled `.S` file. It is
-low-level cryptographic code. Our priorities are **correctness, constant-time behaviour, and
-performance**, in that order.
+This crate is the Apple AArch64 assembly backend for the Pasta field arithmetic of `pasta_curves`:
+Montgomery multiplication and squaring as inline `asm!` blocks, and a repeated-squaring chain and
+conversion out of Montgomery form composed from them. It is low-level cryptographic code. Our
+priorities are **correctness, constant-time behaviour, and performance**, in that order.
 
 The routines are transcriptions of Supranational's Semolina v0.1.4 (see `README.md`). The
 instruction streams are the object of machine-checked correctness proofs, so a change to an
@@ -38,8 +37,8 @@ responsible author; "the AI generated it" is not a justification during review.
 
 ## Build & Test Commands
 
-The crate is empty except on `target_arch = "aarch64"` with `target_vendor = "apple"`, where
-the build script assembles `src/asm/pasta_mul-armv8.S` with the `cc` crate. On that target:
+The crate is empty except on `target_arch = "aarch64"` with `target_vendor = "apple"`. Nothing is
+assembled at build time, so no C toolchain is needed. On that target:
 
 ```sh
 cargo build
@@ -63,10 +62,9 @@ stated in its commit.
 
 ## Code Conventions
 
-- **Preserve constant-time behaviour.** No secret-dependent branches or memory accesses in
-  the blocks or the `.S`; conditional reductions use `csel` after a full-width subtraction.
+- **Preserve constant-time behaviour.** No secret-dependent branches or memory accesses in the
+  blocks; the repeated-squaring loop branches only on its public count. Conditional reductions use
+  `csel` after a full-width subtraction.
 - **Operand contracts are stated on the entry points and checked by `debug_assert!`.** A
   change to a contract needs a change to the proofs that establish it.
-- **The `.S` symbols keep their `pasta_curves_` prefix**, so that the file stays identical to
-  the one the transcription and proofs were made from; renaming them is a coordinated change.
 - Commit messages: short title, body explaining the motivation for the change.
