@@ -51,6 +51,9 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt -- --check
 ```
 
+`scripts/ci.sh` runs every check CI runs, these and the formalization's, in one go; a check
+whose tool is not installed is skipped with a note on how to install it.
+
 On any other target, `cargo build` and `cargo test` must still succeed, with nothing to test:
 that is what keeps a consumer's optional dependency harmless off AArch64. A cfg-gated
 test that compiles out still reports success, so CI counts the `#[test]` functions in the

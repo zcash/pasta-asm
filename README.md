@@ -41,7 +41,8 @@ each entry point.
 
 On AArch64, `cargo test --release` runs known-answer tests of the four entry points for both
 fields; on other targets there is nothing to test. `pasta_curves` tests the backend against
-its portable arithmetic when its `aarch64-asm` feature is enabled.
+its portable arithmetic when its `aarch64-asm` feature is enabled. `scripts/ci.sh` runs every
+check CI runs.
 
 ## Formal verification
 
