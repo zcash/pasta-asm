@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![no_std]
-#![cfg(target_arch = "aarch64")]
+#![cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #![deny(missing_docs)]
 
 //! AArch64 assembly backend for the Pasta fields.
@@ -78,6 +78,8 @@
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 
+mod unverified;
+
 #[cfg(test)]
 mod tests;
 
@@ -114,10 +116,16 @@ pub fn mul(lhs: &Limbs, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     {
         crate::aarch64::mul(lhs, rhs, modulus, inv)
     }
+
+    #[cfg(target_arch = "x86_64")]
+    crate::unverified::mul(lhs, rhs, modulus, inv)
 }
 
 /// Squares a canonical Montgomery residue for a Pasta modulus (the input's
 /// canonicity is debug-asserted).
+///
+/// Currently only available for `aarch64`.
+#[cfg(target_arch = "aarch64")]
 #[inline(always)]
 pub fn square(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     debug_assert!(
@@ -129,6 +137,9 @@ pub fn square(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     {
         crate::aarch64::square(value, modulus, inv)
     }
+
+    // No x86_64 semolina option because calling across the FFI is slower than
+    // the portable Rust code.
 }
 
 /// Squares a canonical Montgomery residue `count` times, then multiplies the
@@ -137,11 +148,20 @@ pub fn square(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
 /// registers throughout. A `count` of zero is just the multiplication.
 #[inline]
 pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    let mut acc = *value;
-    for _ in 0..count {
-        acc = square(&acc, modulus, inv);
+    // When we have inline assembly, the Rust compiler can optimise this general code.
+    #[cfg(target_arch = "aarch64")]
+    {
+        let mut acc = *value;
+        for _ in 0..count {
+            acc = square(&acc, modulus, inv);
+        }
+        mul(&acc, rhs, modulus, inv)
     }
-    mul(&acc, rhs, modulus, inv)
+
+    // When we have external assembly, we need to use a fused routine to see benefits
+    // (otherwise the repeated FFI-crossing swamps any speedups).
+    #[cfg(target_arch = "x86_64")]
+    crate::unverified::sqr_n_mul(value, count, rhs, modulus, inv)
 }
 
 /// Converts a Montgomery residue into its canonical integer,
@@ -149,7 +169,15 @@ pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv:
 /// four-limb `value` is accepted: `1` is canonical with limbs 1 to 3 zero, so
 /// it is a right operand inside the multiplication's contract for any left
 /// operand (`mulMont_spec_of_rhs_lt` in `lean/`).
+#[cfg(target_arch = "aarch64")]
 #[inline]
 pub fn from_mont(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    mul(value, &[1, 0, 0, 0], modulus, inv)
+    // When we have inline assembly, the Rust compiler can optimise this general code.
+    #[cfg(target_arch = "aarch64")]
+    {
+        mul(value, &[1, 0, 0, 0], modulus, inv)
+    }
+
+    // No x86_64 semolina option because calling across the FFI is slower than
+    // the portable Rust code.
 }

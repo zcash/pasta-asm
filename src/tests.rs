@@ -175,3 +175,51 @@ fn from_mont_known_answers() {
         assert_eq!(from_mont(&ZERO, &f.modulus, f.inv), ZERO);
     }
 }
+
+#[test]
+fn mul_matches_semolina() {
+    use crate::unverified::mul as pasta_mul;
+
+    // We already test that the running assembly matches the KATs, so to finish the check
+    // we run the KATs against Semolina directly on the targets we don't use it for.
+    let fp = FIELDS[0];
+    let fq = FIELDS[1];
+
+    assert_eq!(pasta_mul(&fp.r, &fp.r, &fp.modulus, fp.inv), fp.r);
+    assert_eq!(pasta_mul(&fp.r, &fp.r2, &fp.modulus, fp.inv), fp.r2);
+    assert_eq!(pasta_mul(&fp.r2, &fp.r3, &fp.modulus, fp.inv), fp.r4);
+    assert_eq!(pasta_mul(&fp.r3, &fp.r2, &fp.modulus, fp.inv), fp.r4);
+    let pm1 = p_minus_1(fp);
+    assert_eq!(pasta_mul(&pm1, &pm1, &fp.modulus, fp.inv), fp.pm1_sq);
+    assert_eq!(pasta_mul(&ZERO, &pm1, &fp.modulus, fp.inv), ZERO);
+
+    assert_eq!(pasta_mul(&fq.r, &fq.r, &fq.modulus, fq.inv), fq.r);
+    assert_eq!(pasta_mul(&fq.r, &fq.r2, &fq.modulus, fq.inv), fq.r2);
+    assert_eq!(pasta_mul(&fq.r2, &fq.r3, &fq.modulus, fq.inv), fq.r4);
+    assert_eq!(pasta_mul(&fq.r3, &fq.r2, &fq.modulus, fq.inv), fq.r4);
+    let pm1 = p_minus_1(fq);
+    assert_eq!(pasta_mul(&pm1, &pm1, &fq.modulus, fq.inv), fq.pm1_sq);
+    assert_eq!(pasta_mul(&ZERO, &pm1, &fq.modulus, fq.inv), ZERO);
+}
+
+#[test]
+fn square_matches_semolina() {
+    use crate::unverified::sqr as pasta_sqr;
+
+    // We already test that the running assembly matches the KATs, so to finish the check
+    // we run the KATs against Semolina directly on the targets we don't use it for.
+    let fp = FIELDS[0];
+    let fq = FIELDS[1];
+
+    assert_eq!(pasta_sqr(&fp.r, &fp.modulus, fp.inv), fp.r);
+    assert_eq!(pasta_sqr(&fp.r2, &fp.modulus, fp.inv), fp.r3);
+    let pm1 = p_minus_1(fp);
+    assert_eq!(pasta_sqr(&pm1, &fp.modulus, fp.inv), fp.pm1_sq);
+    assert_eq!(pasta_sqr(&ZERO, &fp.modulus, fp.inv), ZERO);
+
+    assert_eq!(pasta_sqr(&fq.r, &fq.modulus, fq.inv), fq.r);
+    assert_eq!(pasta_sqr(&fq.r2, &fq.modulus, fq.inv), fq.r3);
+    let pm1 = p_minus_1(fq);
+    assert_eq!(pasta_sqr(&pm1, &fq.modulus, fq.inv), fq.pm1_sq);
+    assert_eq!(pasta_sqr(&ZERO, &fq.modulus, fq.inv), ZERO);
+}
