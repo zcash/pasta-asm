@@ -3,7 +3,7 @@
 > This file is read by AI coding agents (Claude Code, GitHub Copilot, Cursor, Devin, etc.).
 > It provides project context and contribution policies.
 
-This crate is the Apple AArch64 assembly backend for the Pasta field arithmetic of `pasta_curves`:
+This crate is the AArch64 assembly backend for the Pasta field arithmetic of `pasta_curves`:
 Montgomery multiplication and squaring as inline `asm!` blocks, and a repeated-squaring chain and
 conversion out of Montgomery form composed from them. It is low-level cryptographic code. Our
 priorities are **correctness, constant-time behaviour, and performance**, in that order.
@@ -37,8 +37,8 @@ responsible author; "the AI generated it" is not a justification during review.
 
 ## Build & Test Commands
 
-The crate is empty except on `target_arch = "aarch64"` with `target_vendor = "apple"`. Nothing is
-assembled at build time, so no C toolchain is needed. On that target:
+The crate is available on `target_arch = "aarch64"` and empty on other targets. Nothing is
+assembled at build time, so no C toolchain is needed. On AArch64:
 
 ```sh
 cargo build
@@ -49,14 +49,13 @@ cargo fmt -- --check
 ```
 
 On any other target, `cargo build` and `cargo test` must still succeed, with nothing to test:
-that is what keeps a consumer's optional dependency harmless off Apple AArch64. A cfg-gated
+that is what keeps a consumer's optional dependency harmless off AArch64. A cfg-gated
 test that compiles out still reports success, so CI counts the `#[test]` functions in the
 source and requires the run to report exactly that many passed, in both profiles.
 
-The crate is `no_std` with no dependencies, and CI proves both. Every target the crate is not
-empty on has a std to link, so the no_std check builds `core` from source on a nightly
-toolchain instead of using the sysroot (`cargo +nightly build --release -Z
-build-std=core,compiler_builtins --target aarch64-apple-darwin`), and the Ubuntu job asserts
+The crate is `no_std` with no dependencies, and CI proves both. The no_std check builds `core`
+from source on a nightly toolchain instead of using the sysroot (`cargo +nightly build --release
+-Z build-std=core,compiler_builtins --target aarch64-apple-darwin`), and the Ubuntu job asserts
 that `cargo tree` lists nothing but the crate. Keep it that way; a dependency needs a reason
 stated in its commit.
 

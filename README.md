@@ -1,9 +1,8 @@
 # pasta-aarch64-asm
 
-Apple AArch64 assembly backend for the Pasta (Pallas and Vesta) field arithmetic of the
+AArch64 assembly backend for the Pasta (Pallas and Vesta) field arithmetic of the
 [`pasta_curves`](https://github.com/zcash/pasta_curves) crate: Montgomery multiplication,
-squaring, a repeated-squaring chain, and conversion out of Montgomery form, for the
-`aarch64-apple-*` targets.
+squaring, a repeated-squaring chain, and conversion out of Montgomery form.
 
 ## Provenance
 
@@ -21,7 +20,7 @@ chain and the conversion through assembled routines instead.
 
 ## Usage
 
-The crate is empty except on `target_arch = "aarch64"` with `target_vendor = "apple"`, so a
+The crate is available on `target_arch = "aarch64"` and is empty on other targets, so a
 consumer gates its use on that `cfg` and falls back to portable arithmetic elsewhere. Nothing is
 assembled at build time: the blocks are compiled by the Rust toolchain, so no C toolchain is
 needed, and the crate is `no_std` with no dependencies.
@@ -34,9 +33,9 @@ each entry point.
 
 ## Testing
 
-On Apple AArch64, `cargo test --release` runs known-answer tests of the four entry points for
-both fields; on other targets there is nothing to test. `pasta_curves` tests the backend
-against its portable arithmetic when its `aarch64-asm` feature is enabled.
+On AArch64, `cargo test --release` runs known-answer tests of the four entry points for both
+fields; on other targets there is nothing to test. `pasta_curves` tests the backend against
+its portable arithmetic when its `aarch64-asm` feature is enabled.
 
 ## License
 

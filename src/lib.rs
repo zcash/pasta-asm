@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![no_std]
-#![cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
+#![cfg(target_arch = "aarch64")]
 #![deny(missing_docs)]
 
-//! Apple AArch64 assembly backend for the Pasta fields.
+//! AArch64 assembly backend for the Pasta fields.
 //!
 //! Montgomery multiplication and squaring are inline `asm!` blocks below. The
 //! repeated-squaring chain and the conversion out of Montgomery form are
@@ -60,10 +60,10 @@
 //!
 //! # Availability
 //!
-//! The backend exists only for `target_arch = "aarch64"` with
-//! `target_vendor = "apple"`. On every other target this crate is empty, so a
-//! consumer gates its use on the same `cfg` and falls back to portable
-//! arithmetic elsewhere. Nothing is assembled at build time: the blocks are
+//! The backend exists only for `target_arch = "aarch64"`. On every other
+//! target this crate is empty, so a consumer gates its use on the same
+//! `cfg` and falls back to portable arithmetic elsewhere. Nothing is assembled
+//! at build time: the blocks are
 //! compiled by the Rust toolchain, so no C toolchain is needed, and the crate
 //! is `no_std` with no dependencies.
 //!

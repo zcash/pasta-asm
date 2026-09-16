@@ -6,7 +6,7 @@
 //! agree with those. The differential tests against portable arithmetic live in
 //! `pasta_curves`, which has both implementations.
 
-use super::{from_mont, mul, sqr_n_mul, square, Limbs};
+use super::{Limbs, from_mont, mul, sqr_n_mul, square};
 
 /// One field's constants and known answers.
 struct Field {
