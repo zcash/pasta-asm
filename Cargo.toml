@@ -1,0 +1,12 @@
+[package]
+name = "pasta-aarch64-asm"
+description = "Apple AArch64 assembly backend for the Pasta (Pallas and Vesta) field arithmetic"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/zcash/pasta-aarch64-asm"
+categories = ["cryptography", "no-std::no-alloc"]
+keywords = ["pasta", "pallas", "vesta", "montgomery", "aarch64"]
+
+[dependencies]

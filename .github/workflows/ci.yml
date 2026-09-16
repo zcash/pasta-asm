@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test on Apple AArch64
+    # macos-latest is Apple silicon, the only target the crate compiles
+    # assembly for.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Confirm the runner is Apple AArch64
+        # If GitHub ever moves macos-latest back to x86_64, the crate would
+        # compile out and every check below would pass vacuously.
+        run: test "$(uname -sm)" = "Darwin arm64"
+      - name: Build
+        run: cargo build --verbose
+      - name: Test (debug, with the debug assertions)
+        run: cargo test --verbose
+      - name: Test (release)
+        run: cargo test --verbose --release
+      - name: Confirm every test in the source ran, in both profiles
+        # A cfg-gated test that silently compiles out still reports success,
+        # so count the `#[test]` functions in the source and require the run
+        # to report exactly that many passed. A test added to the source then
+        # raises the expectation by itself.
+        run: |
+          expected=$(grep -rh '^\s*#\[test\]' src | wc -l | tr -d ' ')
+          echo "tests in the source: $expected"
+          test "$expected" -gt 0
+          for profile in "" --release; do
+            out=$(cargo test $profile 2>&1)
+            echo "$out"
+            echo "$out" | grep -q "^test result: ok. $expected passed"
+          done
+      - name: Verify working directory is clean
+        run: git diff --exit-code
+
+  no-std:
+    name: no_std, with no std to fall back on
+    # `#![no_std]` keeps std out of the crate's own code, but every target the
+    # crate is not empty on has a std to link, so build core from source
+    # instead of using the sysroot: nothing that reaches for std can compile.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Confirm the runner is Apple AArch64
+        run: test "$(uname -sm)" = "Darwin arm64"
+      - name: Install a nightly toolchain with the library sources
+        run: rustup toolchain install nightly --profile minimal --component rust-src
+      - name: Build against core alone
+        run: |
+          cargo +nightly build --verbose --release \
+            -Z build-std=core,compiler_builtins --target aarch64-apple-darwin
+
+  other-targets:
+    name: Empty crate elsewhere
+    # The crate must build, and test with nothing to run, wherever a consumer
+    # enables the optional dependency.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: cargo build --verbose
+      - name: Test (debug)
+        run: cargo test --verbose
+      - name: Test (release)
+        run: cargo test --verbose --release
+      - name: Confirm the crate has no dependencies
+        # `#![no_std]` keeps std out of the crate's own code; an empty normal
+        # dependency graph keeps it out of everything the crate links. Together
+        # they are the whole no_std guarantee, since every target the crate is
+        # not empty on has a std to link.
+        run: |
+          deps=$(cargo tree -e normal --target all --prefix none)
+          echo "$deps"
+          test "$(printf '%s\n' "$deps" | grep -c .)" -eq 1
+
+  clippy:
+    name: Clippy
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  doc:
+    name: Documentation
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the documentation
+        run: cargo doc --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check formatting
+        run: cargo fmt -- --check
