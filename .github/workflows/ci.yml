@@ -14,15 +14,19 @@ permissions:
 
 jobs:
   test:
-    name: Build and test on Apple AArch64
-    # macos-latest is Apple silicon, the only target the crate compiles
-    # assembly for.
-    runs-on: macos-latest
+    name: Build and test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple silicon.
+        os: [ubuntu-24.04-arm, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Confirm the runner is Apple AArch64
+        if: ${{ matrix.os == 'macos-latest' }}
         # If GitHub ever moves macos-latest back to x86_64, the crate would
         # compile out and every check below would pass vacuously.
         run: test "$(uname -sm)" = "Darwin arm64"
@@ -54,13 +58,11 @@ jobs:
     # `#![no_std]` keeps std out of the crate's own code, but every target the
     # crate is not empty on has a std to link, so build core from source
     # instead of using the sysroot: nothing that reaches for std can compile.
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Confirm the runner is Apple AArch64
-        run: test "$(uname -sm)" = "Darwin arm64"
       - name: Install a nightly toolchain with the library sources
         run: rustup toolchain install nightly --profile minimal --component rust-src
       - name: Build against core alone
@@ -95,7 +97,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,7 +107,7 @@ jobs:
 
   doc:
     name: Documentation
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
