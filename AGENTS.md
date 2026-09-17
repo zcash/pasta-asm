@@ -39,8 +39,8 @@ responsible author; "the AI generated it" is not a justification during review.
 ## Build & Test Commands
 
 The crate provides a backend on `target_arch = "aarch64"` and, in part, on
-`target_arch = "x86_64"`: `add` and `sub` on every x86-64 target, and `mul` and
-`square` on x86-64 with 64-bit pointers. It is empty on other targets. Nothing
+`target_arch = "x86_64"`: `add`, `sub`, and `from_mont` on every x86-64 target, and
+`mul` and `square` on x86-64 with 64-bit pointers. It is empty on other targets. Nothing
 is assembled at build time, so no C toolchain is needed. On all of those:
 
 ```sh
