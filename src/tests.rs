@@ -6,7 +6,18 @@
 //! agree with those. The differential tests against portable arithmetic live in
 //! `pasta_curves`, which has both implementations.
 
-use super::{Limbs, add, from_mont, mul, sqr_n_mul, square, sub};
+// The mul-family routines are gated on 64-bit pointers on x86-64, so on
+// other targets the constants below are unused; the known answers are
+// always kept in full so the sources match across targets.
+#![allow(dead_code)]
+
+use super::{Limbs, add, from_mont, sub};
+
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
+use super::{mul, sqr_n_mul, square};
 
 /// One field's constants and known answers.
 struct Field {
@@ -204,6 +215,10 @@ fn sub_known_answers() {
     }
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 #[test]
 fn mul_known_answers() {
     for f in FIELDS {
@@ -217,6 +232,10 @@ fn mul_known_answers() {
     }
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 #[test]
 fn square_known_answers() {
     for f in FIELDS {
@@ -228,6 +247,10 @@ fn square_known_answers() {
     }
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 #[test]
 fn sqr_n_mul_known_answers() {
     for f in FIELDS {
