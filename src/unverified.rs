@@ -21,6 +21,13 @@ pub(crate) fn sqr_n_mul(a: &Limbs, n: usize, b: &Limbs, modulus: &Limbs, inv: u6
     }
 }
 
+#[inline(always)]
+pub(crate) fn invert(a: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
+    let mut out = Limbs::default();
+    unsafe { pasta_reciprocal(&mut out, a, modulus, inv) };
+    out
+}
+
 unsafe extern "C" {
     fn pasta_add(out: *mut Limbs, a: *const Limbs, b: *const Limbs, p: *const Limbs);
     fn pasta_mul(out: *mut Limbs, a: *const Limbs, b: *const Limbs, p: *const Limbs, p0: u64);
@@ -32,4 +39,5 @@ unsafe extern "C" {
         p: *const Limbs,
         p0: u64,
     );
+    fn pasta_reciprocal(out: *mut Limbs, a: *const Limbs, p: *const Limbs, p0: u64);
 }

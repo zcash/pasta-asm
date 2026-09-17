@@ -164,6 +164,18 @@ pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv:
     crate::unverified::sqr_n_mul(value, count, rhs, modulus, inv)
 }
 
+/// Inverts a canonical Montgomery residue for a Pasta modulus (the input's
+/// canonicity is debug-asserted).
+#[inline(always)]
+pub fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
+    debug_assert!(
+        is_canonical(value, modulus),
+        "pasta_asm::invert requires a canonical input"
+    );
+
+    crate::unverified::invert(value, modulus, inv)
+}
+
 /// Converts a Montgomery residue into its canonical integer,
 /// `value * 2^-256 mod p`, as a Montgomery multiplication by one. Any
 /// four-limb `value` is accepted: `1` is canonical with limbs 1 to 3 zero, so
