@@ -22,8 +22,9 @@ chain and the conversion through assembled routines instead.
 ## Usage
 
 The crate provides a backend for `target_arch = "aarch64"` and, in part, for
-`target_arch = "x86_64"`: `add` and `sub` are register-only and available on every
-x86-64 target, while `mul`, `square`, and the routines built on them read limbs through
+`target_arch = "x86_64"`: `add`, `sub`, and `from_mont` are register-only and available
+on every x86-64 target (MULX needs BMI2 for `from_mont`), while `mul`, `square`, and the
+routines built on them read limbs through
 pointers and so require 64-bit pointers, plus MULX and ADCX/ADOX (BMI2 and ADX: Intel
 Broadwell / AMD Zen or newer). On other targets this crate is empty, so a consumer gates
 its use on that `cfg` and falls back to portable arithmetic
