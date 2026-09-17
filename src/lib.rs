@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![no_std]
-#![cfg(target_arch = "aarch64")]
+#![cfg(any(target_arch = "aarch64", doc))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
 //! Assembly backends for the Pasta fields.
@@ -24,7 +25,7 @@
 //!
 //! [Semolina]: https://github.com/supranational/semolina
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", doc))]
 mod aarch64;
 
 #[cfg(test)]

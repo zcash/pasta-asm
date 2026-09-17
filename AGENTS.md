@@ -54,6 +54,11 @@ that is what keeps a consumer's optional dependency harmless off AArch64. A cfg-
 test that compiles out still reports success, so CI counts the `#[test]` functions in the
 source and requires the run to report exactly that many passed, in both profiles.
 
+Documentation is a synthetic cross-platform build: `cfg(doc)` retains APIs that are unavailable
+on the rustdoc host, while `doc(cfg(...))` renders their real architecture requirements. Because
+`doc(cfg)` is still unstable, CI and docs.rs use nightly with `--cfg docsrs`. When adding another
+backend, update these conditions and keep doc-only fallback bodies non-executable.
+
 The crate is `no_std` with no dependencies, and CI proves both. The no_std check builds `core`
 from source on a nightly toolchain instead of using the sysroot (`cargo +nightly build --release
 -Z build-std=core,compiler_builtins --target aarch64-apple-darwin`), and the Ubuntu job asserts
