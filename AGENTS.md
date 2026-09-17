@@ -4,10 +4,10 @@
 > It provides project context and contribution policies.
 
 This crate provides assembly backends for the Pasta field arithmetic of `pasta_curves`. It
-currently contains an AArch64 backend: Montgomery multiplication and squaring as inline `asm!`
-blocks, and a repeated-squaring chain and conversion out of Montgomery form composed from them.
-It is low-level cryptographic code. Our priorities are **correctness, constant-time behaviour,
-and performance**, in that order.
+contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring as
+inline `asm!` blocks, modular addition and subtraction, and a repeated-squaring chain and
+conversion out of Montgomery form composed from them. It is low-level cryptographic code. Our
+priorities are **correctness, constant-time behaviour, and performance**, in that order.
 
 The routines are transcriptions of Supranational's Semolina v0.1.4 (see `README.md`). The
 instruction streams are the object of machine-checked correctness proofs, so a change to an
@@ -38,8 +38,10 @@ responsible author; "the AI generated it" is not a justification during review.
 
 ## Build & Test Commands
 
-The crate currently provides a backend on `target_arch = "aarch64"` and is empty on other
-targets. Nothing is assembled at build time, so no C toolchain is needed. On AArch64:
+The crate provides a backend on `target_arch = "aarch64"` and, in part, on
+`target_arch = "x86_64"`: `add` and `sub` on every x86-64 target, and `mul` and
+`square` on x86-64 with 64-bit pointers. It is empty on other targets. Nothing
+is assembled at build time, so no C toolchain is needed. On all of those:
 
 ```sh
 cargo build
