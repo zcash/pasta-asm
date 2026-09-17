@@ -1,12 +1,13 @@
-# `pasta-aarch64-asm` — Agent Guidelines
+# `pasta-asm` — Agent Guidelines
 
 > This file is read by AI coding agents (Claude Code, GitHub Copilot, Cursor, Devin, etc.).
 > It provides project context and contribution policies.
 
-This crate is the AArch64 assembly backend for the Pasta field arithmetic of `pasta_curves`:
-Montgomery multiplication and squaring as inline `asm!` blocks, and a repeated-squaring chain and
-conversion out of Montgomery form composed from them. It is low-level cryptographic code. Our
-priorities are **correctness, constant-time behaviour, and performance**, in that order.
+This crate provides assembly backends for the Pasta field arithmetic of `pasta_curves`. It
+currently contains an AArch64 backend: Montgomery multiplication and squaring as inline `asm!`
+blocks, and a repeated-squaring chain and conversion out of Montgomery form composed from them.
+It is low-level cryptographic code. Our priorities are **correctness, constant-time behaviour,
+and performance**, in that order.
 
 The routines are transcriptions of Supranational's Semolina v0.1.4 (see `README.md`). The
 instruction streams are the object of machine-checked correctness proofs, so a change to an
@@ -37,8 +38,8 @@ responsible author; "the AI generated it" is not a justification during review.
 
 ## Build & Test Commands
 
-The crate is available on `target_arch = "aarch64"` and empty on other targets. Nothing is
-assembled at build time, so no C toolchain is needed. On AArch64:
+The crate currently provides a backend on `target_arch = "aarch64"` and is empty on other
+targets. Nothing is assembled at build time, so no C toolchain is needed. On AArch64:
 
 ```sh
 cargo build

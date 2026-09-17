@@ -1,11 +1,11 @@
 [package]
-name = "pasta-aarch64-asm"
-description = "AArch64 assembly backend for the Pasta (Pallas and Vesta) field arithmetic"
+name = "pasta-asm"
+description = "Assembly backends for the Pasta (Pallas and Vesta) field arithmetic"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
-repository = "https://github.com/zcash/pasta-aarch64-asm"
+repository = "https://github.com/zcash/pasta-asm"
 categories = ["cryptography", "no-std::no-alloc"]
 keywords = ["pasta", "pallas", "vesta", "montgomery", "aarch64"]
 

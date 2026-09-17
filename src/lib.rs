@@ -1,20 +1,19 @@
-// Copyright the pasta-aarch64-asm contributors.
+// Copyright the pasta-asm contributors.
 // SPDX-License-Identifier: Apache-2.0
 
 #![no_std]
 #![cfg(target_arch = "aarch64")]
 #![deny(missing_docs)]
 
-//! AArch64 assembly backend for the Pasta fields.
+//! Assembly backends for the Pasta fields.
 //!
 //! # Availability
 //!
-//! The backend exists only for `target_arch = "aarch64"`. On every other
-//! target this crate is empty, so a consumer gates its use on the same
-//! `cfg` and falls back to portable arithmetic elsewhere. Nothing is assembled
-//! at build time: the blocks are
-//! compiled by the Rust toolchain, so no C toolchain is needed, and the crate
-//! is `no_std` with no dependencies.
+//! The crate currently provides a backend only for `target_arch = "aarch64"`.
+//! On every other target this crate is empty, so a consumer gates its use on
+//! the same `cfg` and falls back to portable arithmetic elsewhere. Nothing is
+//! assembled at build time: the blocks are compiled by the Rust toolchain, so
+//! no C toolchain is needed, and the crate is `no_std` with no dependencies.
 //!
 //! # Provenance and license
 //!
@@ -56,7 +55,7 @@ pub fn mul(lhs: &Limbs, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     debug_assert!(
         is_canonical(lhs, modulus)
             || (is_canonical(rhs, modulus) && rhs[1..].iter().all(|&limb| limb <= u64::MAX - 2)),
-        "aarch64_asm::mul requires a canonical lhs, or a canonical rhs with limbs 1 to 3 at most \
+        "pasta_asm::mul requires a canonical lhs, or a canonical rhs with limbs 1 to 3 at most \
          2^64 - 3"
     );
 
@@ -72,7 +71,7 @@ pub fn mul(lhs: &Limbs, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
 pub fn square(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     debug_assert!(
         is_canonical(value, modulus),
-        "aarch64_asm::square requires a canonical input"
+        "pasta_asm::square requires a canonical input"
     );
 
     #[cfg(target_arch = "aarch64")]
