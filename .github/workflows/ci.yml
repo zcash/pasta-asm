@@ -113,10 +113,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build the documentation
-        run: cargo doc --no-deps --document-private-items
+      - name: Install nightly Rust
+        run: rustup toolchain install nightly --profile minimal
+      - name: Build the cross-platform documentation
+        run: cargo +nightly doc --no-deps --document-private-items
         env:
-          RUSTDOCFLAGS: -D warnings
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
 
   fmt:
     name: Rustfmt

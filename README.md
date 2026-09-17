@@ -1,16 +1,17 @@
-# pasta-aarch64-asm
+# pasta-asm
 
-AArch64 assembly backend for the Pasta (Pallas and Vesta) field arithmetic of the
-[`pasta_curves`](https://github.com/zcash/pasta_curves) crate: Montgomery multiplication,
-squaring, a repeated-squaring chain, and conversion out of Montgomery form.
+Assembly backends for the Pasta (Pallas and Vesta) field arithmetic of the
+[`pasta_curves`](https://github.com/zcash/pasta_curves) crate. The crate currently provides an
+AArch64 backend for Montgomery multiplication, squaring, a repeated-squaring chain, and
+conversion out of Montgomery form.
 
 ## Provenance
 
 The routines are transcriptions of the Pasta Montgomery routines of Supranational's
 [Semolina](https://github.com/supranational/semolina) v0.1.4
 ([`src/mach-o/pasta_mul-armv8.S`](https://github.com/supranational/semolina/blob/v0.1.4/src/mach-o/pasta_mul-armv8.S)).
-`src/lib.rs` carries multiplication and squaring as register-renamed inline `asm!` blocks of
-`mul_mont_pasta` and of the squaring loop body of `sqr_n_mul_mont_pasta`, with the same
+`src/aarch64.rs` carries multiplication and squaring as register-renamed inline `asm!` blocks
+of `mul_mont_pasta` and of the squaring loop body of `sqr_n_mul_mont_pasta`, with the same
 instructions. The repeated-squaring chain and the conversion out of Montgomery form are
 compositions of those blocks. The blocks were ported and adapted in
 [zakura-core/common](https://github.com/zakura-core/common) and then in
@@ -20,10 +21,10 @@ chain and the conversion through assembled routines instead.
 
 ## Usage
 
-The crate is available on `target_arch = "aarch64"` and is empty on other targets, so a
-consumer gates its use on that `cfg` and falls back to portable arithmetic elsewhere. Nothing is
-assembled at build time: the blocks are compiled by the Rust toolchain, so no C toolchain is
-needed, and the crate is `no_std` with no dependencies.
+The crate currently provides a backend only on `target_arch = "aarch64"` and is empty on other
+targets, so a consumer gates its use on that `cfg` and falls back to portable arithmetic
+elsewhere. Nothing is assembled at build time: the blocks are compiled by the Rust toolchain,
+so no C toolchain is needed, and the crate is `no_std` with no dependencies.
 
 Field elements and moduli are `[u64; 4]`, least significant limb first, and `inv` is
 `-modulus[0]^-1 mod 2^64`. The routines take the modulus and `inv` as arguments, so one

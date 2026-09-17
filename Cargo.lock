@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "pasta-aarch64-asm"
+name = "pasta-asm"
 version = "0.1.0"
