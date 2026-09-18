@@ -4,8 +4,8 @@
 > It provides project context and contribution policies.
 
 This crate provides assembly backends for the Pasta field arithmetic of `pasta_curves`. It
-contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring as
-inline `asm!` blocks, modular addition and subtraction, and a repeated-squaring chain and
+contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring,
+and modular addition and subtraction, as inline `asm!` blocks, and a repeated-squaring chain and
 conversion out of Montgomery form composed from them. It is low-level cryptographic code. Our
 priorities are **correctness, constant-time behaviour, and performance**, in that order.
 
