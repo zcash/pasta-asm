@@ -11,15 +11,15 @@
 //!
 //! The crate provides a backend for `target_arch = "aarch64"`, and for
 //! `target_arch = "x86_64"` with 64-bit pointers. On x86-64, `add`, `sub`,
-//! and `from_mont` are register-only, while `mul`, `square`, and the
+//! `invert`, and `from_mont` are register-only, while `mul`, `square`, and the
 //! routines built on them read limbs through pointers; the x32 ABI's 32-bit
 //! pointers would break them (see the module docs for why registers alone
 //! cannot serve there), so the crate is empty on that target. They also
 //! need, at run time, a CPU with BMI2 and ADX (MULX, ADCX/ADOX: Intel
-//! Broadwell / AMD Zen or newer); neither is checked. `from_mont` uses MULX
-//! (BMI2) alone. Apple x86-64 targets are excluded altogether: they reserve
-//! `rbp`, and so have fewer available registers than the squaring blocks
-//! need.
+//! Broadwell / AMD Zen or newer); neither is checked. `invert` and `from_mont`
+//! use MULX (BMI2) alone. Apple x86-64 targets are excluded altogether: they
+//! reserve `rbp`, and so have fewer available registers than the squaring
+//! blocks need.
 //!
 //! On every other target, that is any target other than AArch64 and
 //! non-Apple x86-64 with 64-bit pointers, the crate is empty. It is also
@@ -81,10 +81,13 @@
 //!
 //! # Provenance and license
 //!
-//! The routines are transcriptions of the Pasta Montgomery routines of
-//! Supranational's [Semolina] v0.1.4, which are licensed under the Apache
-//! License, Version 2.0 only; so is this crate. See the README for the
-//! history of the transcription.
+//! The Montgomery multiplication and squaring backends derive from the Pasta
+//! Montgomery routines of Supranational's [Semolina] v0.1.4. Inversion is a staged
+//! adaptation of its `ct_inverse_pasta` binary-GCD routine: the arithmetic kernels
+//! retain the upstream algorithm, while coefficient widths, helper interfaces,
+//! the Rust driver, and the Montgomery wrapper are adapted for inline assembly.
+//! These sources and this crate are licensed under the Apache License, Version
+//! 2.0 only. See the README for the source links and adaptation history.
 //!
 //! [Semolina]: https://github.com/supranational/semolina
 
@@ -178,6 +181,9 @@ if_supported! {
 
     #[cfg(test)]
     mod tests;
+
+    #[cfg(test)]
+    mod invert_tests;
 
     mod entry;
     pub use entry::*;

@@ -3,11 +3,11 @@
 Assembly backends for the Pasta (Pallas and Vesta) field arithmetic of the
 [`pasta_curves`](https://github.com/zcash/pasta_curves) crate. The crate provides AArch64 and
 x86-64 backends for modular addition and subtraction, Montgomery multiplication and squaring, a
-repeated-squaring chain, and conversion out of Montgomery form.
+repeated-squaring chain, inversion, and conversion out of Montgomery form.
 
 ## Provenance
 
-The routines are transcriptions of the Pasta Montgomery routines of Supranational's
+The Montgomery multiplication and squaring backends derive from the Pasta routines of Supranational's
 [Semolina](https://github.com/supranational/semolina) v0.1.4
 ([`src/mach-o/pasta_mul-armv8.S`](https://github.com/supranational/semolina/blob/v0.1.4/src/mach-o/pasta_mul-armv8.S)).
 `src/aarch64.rs` carries multiplication and squaring as register-renamed inline `asm!` blocks
@@ -22,15 +22,38 @@ blocks, which are not Semolina routines, and `src/x86_64.rs`, an x86-64 transcri
 same Montgomery routines rescheduled around MULX and ADCX/ADOX, were imported from
 zakura-pasta-curves.
 
+The inversion backends in `src/{aarch64,x86_64}/invert.rs` are staged inline-assembly
+ports of Semolina v0.1.4's `ct_inverse_pasta` routine (commit
+`13ffc78074a6fbec44a4fd12b7f585a0bc1dc154`). Sources are the
+[AArch64 generator](https://github.com/supranational/semolina/blob/v0.1.4/src/asm/ct_inverse_mod_256-armv8.pl)
+and [x86-64 generator](https://github.com/supranational/semolina/blob/v0.1.4/src/asm/ct_inverse_mod_256-x86_64.pl),
+checked against their generated
+[AArch64](https://github.com/supranational/semolina/blob/v0.1.4/src/elf/ct_inverse_mod_256-armv8.S)
+and [x86-64](https://github.com/supranational/semolina/blob/v0.1.4/src/elf/ct_inverse_mod_256-x86_64.s)
+instruction streams. The Montgomery wrapper is adapted from
+[`recip.c`](https://github.com/supranational/semolina/blob/v0.1.4/src/recip.c).
+
+The ports retain the approximation, binary-GCD inner-loop, and final-correction
+kernels and the fixed 15 × 31 + 47 iteration schedule. They adapt coefficient updates
+to fixed-width signed arithmetic instead of upstream's width-specialized helpers,
+replace memory-based helper interfaces with register operands, and use a Rust driver.
+Every inversion assembly block declares `nomem`; compiler-generated loads and spills
+outside the blocks remain possible. Converting the input out of Montgomery form first
+and using a split reduction afterward avoids upstream's final multiplication by `R^2`.
+There is no global assembly or external assembler. Inversion returns a canonical Montgomery
+residue and maps zero to zero. This new port is not covered by the existing Lean
+proofs. The independent inversion tests run on native x86-64; AArch64 has been
+cross-built but still needs runtime validation on AArch64 hardware.
+
 ## Usage
 
 The crate provides a backend for `target_arch = "aarch64"`, and for `target_arch = "x86_64"`
-with 64-bit pointers. On x86-64, `add`, `sub`, and `from_mont` are register-only (MULX needs
-BMI2 for `from_mont`). `mul`, `square`, and the routines built on them read limbs through
-pointers, which the x32 ABI's 32-bit pointers would break, so the crate is empty on that
-target; they also need MULX and ADCX/ADOX (BMI2 and ADX: Intel Broadwell / AMD Zen or newer).
-Apple x86-64 targets are excluded altogether: they reserve `rbp`, and so have fewer available
-registers than the squaring blocks need.
+with 64-bit pointers. On x86-64, `add`, `sub`, `invert`, and `from_mont` are register-only
+(MULX needs BMI2 for `invert` and `from_mont`). `mul`, `square`, and the routines built on
+them read limbs through pointers, which the x32 ABI's 32-bit pointers would break, so the
+crate is empty on that target; they also need MULX and ADCX/ADOX (BMI2 and ADX: Intel
+Broadwell / AMD Zen or newer). Apple x86-64 targets are excluded altogether: they reserve
+`rbp`, and so have fewer available registers than the squaring blocks need.
 
 On every other target, that is any target other than AArch64 and non-Apple x86-64 with 64-bit
 pointers, the crate is empty. It is also empty, on any target, when the compiler is passed
@@ -84,7 +107,7 @@ points for both fields and replays the reference vectors recorded from the AArch
 in a debug build it also checks that the operand assertions fire outside the contracts.
 Elsewhere, and with `--cfg pasta_asm_disable`, only the crate documentation's example runs,
 on its portable arm. `pasta_curves` tests the backend against its portable arithmetic when its
-`aarch64-asm` feature is enabled. `scripts/ci.sh` runs every check CI runs.
+`asm` feature is enabled. `scripts/ci.sh` runs every check CI runs.
 
 ## Formal verification
 

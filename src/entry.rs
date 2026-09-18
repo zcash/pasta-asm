@@ -206,6 +206,40 @@ pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv:
     }
 }
 
+/// Inverts a canonical Montgomery residue for a Pasta modulus.
+///
+/// Returns a canonical Montgomery residue. Zero maps to zero; callers that need
+/// an optional inverse must check for zero separately.
+///
+/// Uses a fixed schedule of fifteen 31-step batches and a final 47-step batch,
+/// implemented with register-only inline assembly and fixed-bound Rust loops.
+/// On x86-64, the Montgomery conversions require BMI2, but not ADX or 64-bit
+/// pointers. CPU features are not checked at runtime.
+///
+/// # Safety
+///
+/// The input of `invert` must be canonical; this is debug-asserted.
+///
+/// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
+/// correctly derived from it. Any other values will cause undefined results.
+#[inline(always)]
+pub fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
+    debug_assert!(
+        is_canonical(value, modulus),
+        "pasta_asm::invert requires a canonical input"
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::aarch64::invert(value, modulus, inv)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::x86_64::invert(value, modulus, inv)
+    }
+}
+
 /// Converts a Montgomery residue into its canonical integer, `value * 2^-256 mod p`: a
 /// Montgomery multiplication by one.
 ///

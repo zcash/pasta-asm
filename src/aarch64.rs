@@ -28,6 +28,9 @@ use core::arch::asm;
 
 use crate::{Limbs, is_canonical, mul_contract};
 
+mod invert;
+pub(super) use invert::invert;
+
 /// Adds two residues for a Pasta modulus and conditionally subtracts the modulus.
 ///
 /// Like [`mul`], the block hardcodes the Pasta modulus shape
