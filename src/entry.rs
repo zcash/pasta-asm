@@ -186,7 +186,7 @@ pub fn square(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
 ///
 /// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
 /// correctly derived from it. Any other values will cause undefined results.
-#[inline]
+#[inline(always)]
 pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     // On aarch64, `square` and `mul` can be inlined and optimised by Rust.
     #[cfg(target_arch = "aarch64")]
@@ -218,7 +218,7 @@ pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv:
 ///
 /// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
 /// correctly derived from it. Any other values will cause undefined results.
-#[inline]
+#[inline(always)]
 pub fn from_mont(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     // On aarch64, `mul` can be inlined and optimised by Rust.
     #[cfg(target_arch = "aarch64")]
