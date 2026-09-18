@@ -81,6 +81,9 @@ use core::arch::asm;
 
 use crate::{Limbs, is_canonical};
 
+mod invert;
+pub(super) use invert::invert;
+
 const PASTA_HIGH_LIMB: u64 = 1 << 62;
 
 /// Adds two canonical residues and conditionally subtracts the modulus.

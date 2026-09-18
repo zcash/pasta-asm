@@ -11,14 +11,14 @@
 //! # Availability
 //!
 //! The crate provides a backend for `target_arch = "aarch64"` and, in part,
-//! for `target_arch = "x86_64"`: `add`, `sub`, and `from_mont` are
+//! for `target_arch = "x86_64"`: `add`, `sub`, `invert`, and `from_mont` are
 //! register-only and work on every x86-64 target, while `mul`, `square`,
 //! and the routines built on them read limbs through pointers, so they
 //! require 64-bit pointers (the
 //! x32 ABI's 32-bit pointers would break them; see the module docs for why
 //! registers alone cannot serve there) and a CPU with BMI2 and ADX (MULX,
 //! ADCX/ADOX: Intel Broadwell / AMD Zen or newer) at run time — neither is
-//! checked. `from_mont` uses MULX (BMI2) alone. On every other target this
+//! checked. `from_mont` and `invert` require BMI2 alone. On every other target this
 //! crate is empty, so a consumer gates
 //! its use on the same `cfg` and falls back to portable arithmetic
 //! elsewhere. Nothing is  assembled at build time: the blocks are compiled by
@@ -27,10 +27,13 @@
 //!
 //! # Provenance and license
 //!
-//! The routines are transcriptions of the Pasta Montgomery routines of
-//! Supranational's [Semolina] v0.1.4, which are licensed under the Apache
-//! License, Version 2.0 only; so is this crate. See the README for the
-//! history of the transcription.
+//! The Montgomery multiplication and squaring backends derive from the Pasta
+//! Montgomery routines of Supranational's [Semolina] v0.1.4. Inversion is a staged
+//! adaptation of its `ct_inverse_pasta` binary-GCD routine: the arithmetic kernels
+//! retain the upstream algorithm, while coefficient widths, helper interfaces,
+//! the Rust driver, and the Montgomery wrapper are adapted for inline assembly.
+//! These sources and this crate are licensed under the Apache License, Version
+//! 2.0 only. See the README for the source links and adaptation history.
 //!
 //! [Semolina]: https://github.com/supranational/semolina
 
@@ -47,6 +50,9 @@ extern crate std;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod invert_tests;
 
 /// Four little-endian 64-bit limbs, least significant first: a field element
 /// (in Montgomery form, or canonical after [`from_mont`]) or a modulus.
@@ -232,6 +238,40 @@ pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv:
     #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
     {
         crate::x86_64::sqr_n_mul(value, count, rhs, modulus, inv)
+    }
+}
+
+/// Inverts a canonical Montgomery residue for a Pasta modulus.
+///
+/// Returns a canonical Montgomery residue. Zero maps to zero; callers that need
+/// an optional inverse must check for zero separately.
+///
+/// Uses a fixed schedule of fifteen 31-step batches and a final 47-step batch,
+/// implemented with register-only inline assembly and fixed-bound Rust loops.
+/// On x86-64, the Montgomery conversions require BMI2, but not ADX or 64-bit
+/// pointers. CPU features are not checked at runtime.
+///
+/// # Safety
+///
+/// The input of `invert` must be canonical; this is debug-asserted.
+///
+/// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
+/// correctly derived from it. Any other values will cause undefined results.
+#[inline(always)]
+pub fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
+    debug_assert!(
+        is_canonical(value, modulus),
+        "pasta_asm::invert requires a canonical input"
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::aarch64::invert(value, modulus, inv)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::x86_64::invert(value, modulus, inv)
     }
 }
 
