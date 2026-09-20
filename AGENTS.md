@@ -4,8 +4,8 @@
 > It provides project context and contribution policies.
 
 This crate provides assembly backends for the Pasta field arithmetic of `pasta_curves`. It
-contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring as
-inline `asm!` blocks, modular addition and subtraction, and a repeated-squaring chain and
+contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring,
+and modular addition and subtraction, as inline `asm!` blocks, and a repeated-squaring chain and
 conversion out of Montgomery form composed from them. It is low-level cryptographic code. Our
 priorities are **correctness, constant-time behaviour, and performance**, in that order.
 
@@ -51,6 +51,9 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt -- --check
 ```
 
+`scripts/ci.sh` runs every check CI runs, these and the formalization's, in one go; a check
+whose tool is not installed is skipped with a note on how to install it.
+
 On any other target, `cargo build` and `cargo test` must still succeed, with nothing to test:
 that is what keeps a consumer's optional dependency harmless off AArch64. A cfg-gated
 test that compiles out still reports success, so CI counts the `#[test]` functions in the
@@ -66,6 +69,34 @@ from source on a nightly toolchain instead of using the sysroot (`cargo +nightly
 -Z build-std=core,compiler_builtins --target aarch64-apple-darwin`), and the Ubuntu job asserts
 that `cargo tree` lists nothing but the crate. Keep it that way; a dependency needs a reason
 stated in its commit.
+
+## The Lean Formalization
+
+`lean/` is a Lake package (`PastaAArch64Asm`) that models the routines formally and
+contributes to assuring their correctness; see `lean/README.md` for the trust story, the
+theorems and their caveats, and how those theorems are proven. Build it from that directory
+with the elan-managed `lake` for its `lean-toolchain` (a `lake` of another Lean version
+corrupts the shared `.lake` cache):
+
+```sh
+cd lean
+lake exe cache get          # Mathlib's prebuilt oleans, once
+lake build --wfail          # warnings fail the build, as in CI
+cd .. && lean/scripts/check.sh   # regenerate the transcription and check the skeletons
+```
+
+- **`Transcription.lean` and `Vectors.lean` are generated** by `lean/scripts/gen.py` from the
+  `asm!` blocks in `src/aarch64.rs` and the vectors file. Never edit them by hand; change the
+  generator or its inputs and regenerate. `Compositions.lean` is hand-written and mirrors the Rust
+  of `src/lib.rs` (the compositions `sqr_n_mul` and `from_mont`, `is_canonical`, and the condition
+  that `mul` asserts), and `Fields.lean` states the two fields' constants; a change on either side
+  changes the other.
+- **In `Spec.lean`, the generated skeleton lines are not edited either.** Only the theorem
+  statements and the `-- BEGIN ... -- END` annotation blocks are hand-written; `gen.py
+  --check-spec` requires the rest to be the current skeleton. A change to a block regenerates
+  the skeleton, and the annotations are then moved to their new places.
+- **No `sorry`, no `native_decide`, no new axioms.** The nanoda re-check permits only the
+  three standard axioms; concrete facts are checked by `decide +kernel`.
 
 ## Code Conventions
 

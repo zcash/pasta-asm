@@ -41,7 +41,17 @@ each entry point.
 
 On AArch64, `cargo test --release` runs known-answer tests of the four entry points for both
 fields; on other targets there is nothing to test. `pasta_curves` tests the backend against
-its portable arithmetic when its `aarch64-asm` feature is enabled.
+its portable arithmetic when its `aarch64-asm` feature is enabled. `scripts/ci.sh` runs every
+check CI runs.
+
+## Formal verification
+
+`lean/` holds a Lean 4 development that models the routines formally and contributes to assuring
+their correctness. The model is at the instruction level. Individual blocks of assembly are
+proven; from those, each of the six entry points is proved at either Pasta field, under the
+condition that the entry point asserts. The transcription is generated from the crate's own
+inline blocks, CI regenerates and diffs it, and the independent `nanoda` implementation of the
+Lean kernel re-checks the build. See [`lean/README.md`](lean/README.md).
 
 ## License
 
