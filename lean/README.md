@@ -1,14 +1,54 @@
-# Verifying the crate's AArch64 Montgomery routines
+# Verifying the crate's Pasta assembly routines
+
+The `PastaAsm` library separates shared arithmetic definitions and lemmas from
+architecture-specific models. The AArch64 backend has transcriptions and correctness proofs.
+`PastaAsm/X86_64/Semantics.lean` adds the x86-64 word operations and borrow convention;
+`X86_64/Transcription.lean` mechanically transcribes all six assembly blocks from
+`src/x86_64.rs`. The x86-64 addition and subtraction blocks have correctness proofs in
+`X86_64/Spec/Add.lean` and `X86_64/Spec/Sub.lean`, with field-specialized `add_entry_spec`
+and `sub_entry_spec` theorems in `X86_64/Entry.lean`. `X86_64/Spec/Square.lean` proves
+the exact eight-limb square, its `squareHi` Montgomery reduction, and their `sqrMont` composition.
+`X86_64/Spec/FromMont.lean` proves the standalone conversion block for every four-limb input,
+including all four cancellation steps and the final conditional subtraction. `X86_64/Spec/Mul.lean`
+proves Montgomery multiplication under both public operand contracts, using mechanically factored
+internal rounds. The repeated-squaring-and-multiplication and field-entry theorems are also proven.
+`X86_64/Spec.lean` exposes the completed block proofs; `Compositions.lean` mirrors Rust.
+`X86_64/Vectors.lean` contains 740 generated cross-backend checks against the existing
+AArch64 hardware corpus, not x86 hardware captures. Both fields are covered. Of the 312
+excluded multiplication vectors, 180 fail the public contract and another 132 fail the
+x86 backend's additional canonical-rhs assertion. This assertion also causes the existing
+debug Rust hardware-vector test to fail; the Rust code is unchanged. `Checks.lean` supplies
+additional kernel-checked arithmetic regressions.
+
+Both architectures use `scripts/gen.py`, with shared Rust `asm!` parsing and
+architecture-specific instruction emitters; `--check` compares generated output without
+rewriting it. The x86-64 emitter checks operand bindings and output order, read-only input-limb addresses,
+register initialization, and CF/OF availability. Ordinary arithmetic models CF but invalidates
+unmodeled OF; `imul` and shifts invalidate unmodeled flags. Any subsequent read of an invalid
+flag is rejected. `adcx` and `adox` carry chains are tracked independently. The instruction
+rules follow Intel's SDM (see the readable entries for
+[ADCX](https://www.felixcloutier.com/x86/adcx),
+[ADOX](https://www.felixcloutier.com/x86/adox),
+[MULX](https://www.felixcloutier.com/x86/mulx), and
+[shifts](https://www.felixcloutier.com/x86/sal:sar:shl:shr)).
+These are straight-line value models, not proofs of pointer validity or register allocation.
+Generator validation tests run as part of `scripts/check.sh`.
 
 ## Goal
 
-A machine-checked proof that the crate's routines compute Montgomery multiplication, squaring,
-and conversion out of Montgomery form, and modular addition and subtraction, on the Pasta
-fields, under the operand contracts they actually have. The proof is about the instruction
-streams of the crate's own inline `asm!` blocks, `mul`, `square`, `add`, and `sub` in
-`src/aarch64.rs`, not about a re-derivation of the algorithms; the crate's other two entry
-points, `sqr_n_mul` and `from_mont`, are Rust compositions of the first two blocks and are
-modelled as such. The multiplication and squaring blocks are transcriptions of Semolina v0.1.4's
+A machine-checked proof that the crate's routines compute all operations exposed by `src/lib.rs`,
+on the Pasta fields, under the operand contracts they actually have.
+
+The proof is about the instruction streams of the crate's own inline `asm!` blocks, not about
+a re-derivation of the algorithms:
+
+- `src/aarch64.rs`: `add`, `sub`, `mul`, and `square`.
+- `src/x86_64.rs`: `add`, `sub`, `mul`, `square_lo`, `square_hi`, and `from_mont`.
+
+Some of the crate's other entry points, `sqr_n_mul` and `from_mont`, are Rust compositions of
+assembly blocks on some architectures, and are modelled as such.
+
+The multiplication and squaring blocks are transcriptions of Semolina v0.1.4's
 `mul_mont_pasta` and of the squaring loop body of its `sqr_n_mul_mont_pasta`, and the addition
 and subtraction blocks were imported from zakura-pasta-curves (see the crate README for the
 history).
@@ -17,16 +57,17 @@ history).
 
 What is trusted, beyond Lean's kernel and standard axioms:
 
-1. The instruction semantics module (`PastaAArch64Asm/Semantics.lean`): about a dozen
-   AArch64 instructions modelled over 64-bit registers and the carry flag. Small,
-   reviewable, and cross-checked by executing the model on vectors produced by the real
-   binary.
+1. The instruction semantics modules (`PastaAsm/Semantics.lean`, `PastaAsm/AArch64/Semantics.lean`,
+   and `PastaAsm/X86_64/Semantics.lean`): about a dozen AArch64 and x86-64 instructions modelled
+   over 64-bit registers and the carry flag(s). Small, reviewable, and cross-checked by executing
+   the model on vectors produced by the real binary.
 2. The transcription of the inline blocks into Lean. Generated by `scripts/gen.py` from
-   `src/aarch64.rs`, whose front end reads the `asm!` template lines and operand declarations;
-   CI regenerates and diffs.
-3. The Rust of `src/lib.rs` mirrored in `Compositions.lean`: the two compositions `sqr_n_mul`
-   and `from_mont`, the limb comparison `is_canonical`, and the condition that `mul` asserts;
-   a few lines each, checked by inspection.
+   `src/aarch64.rs` and `src/x86_64.rs`, whose front end reads the `asm!` template lines and
+   operand declarations; CI regenerates and diffs.
+3. The Rust mirrored in `PastaAsm/AArch64/Compositions.lean` and `PastaAsm/X86_64/Compositions.lean`:
+   the compositions `sqr_n_mul` and `from_mont`; and in `PastaAsm/Compositions.lean`: the shared
+   limb comparison `is_canonical` and the condition that `mul` asserts. A few lines each, checked
+   by inspection.
 4. The reference vectors: outputs of the real assembly on an Apple M-series machine, at
    pasta_curves commit `8ad85e9fab7929f6236960e472f432a4bd9ccd74`, embedded as kernel-checked
    examples (`decide +kernel`). These are concrete closed facts that any independent run of
@@ -40,27 +81,45 @@ What is trusted, beyond Lean's kernel and standard axioms:
 
 Not modelled formally: the compiler's handling of the blocks' operands, that is, the
 allocation of registers to the placeholders and the `options(pure, nomem, nostack)`
-declaration, and the Rust that composes the blocks. The model treats the operands as limb
+declaration, read-only pointer loads, pointer validity, the compiler's `readonly`
+handling, and the Rust that composes the blocks. The model treats the operands as limb
 inputs and outputs. Those aspects were reviewed by hand.
+
+For x86-64, CF/OF availability is checked by the generator as described above.
 
 ## Layout
 
 ```
-PastaAArch64Asm.lean                  root module, imports everything below
-PastaAArch64Asm/Semantics.lean        registers, carry, instruction functions
-PastaAArch64Asm/Transcription.lean    GENERATED: the blocks and the round
-PastaAArch64Asm/Compositions.lean     the crate's Rust around the blocks: compositions, assertions
-PastaAArch64Asm/Fields.lean           the crate's two fields, with the facts that the proofs assume
-PastaAArch64Asm/Vectors.lean          GENERATED: reference vectors, kernel-checked
-PastaAArch64Asm/Spec.lean             the theorems about the blocks and the compositions
-PastaAArch64Asm/Entry.lean            the theorems about the crate's entry points at its fields
+PastaAsm.lean                         root module, imports everything below
+PastaAsm/Semantics.lean               shared 64-bit arithmetic and limb representation
+PastaAsm/Compositions.lean            shared operand comparisons and contracts
+PastaAsm/Fields.lean                  the two fields and facts about their constants
+PastaAsm/Spec.lean                    shared arithmetic and limb lemmas
+PastaAsm/AArch64.lean                 AArch64 umbrella module
+PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
+PastaAsm/AArch64/Transcription.lean   GENERATED: the blocks and the round
+PastaAsm/AArch64/Compositions.lean    compositions of the AArch64 blocks
+PastaAsm/AArch64/Vectors.lean         GENERATED: reference vectors, kernel-checked
+PastaAsm/AArch64/Spec.lean            proofs about the AArch64 blocks and compositions
+PastaAsm/AArch64/Entry.lean           proofs about the AArch64 entry points at the two fields
 ../test-vectors/pasta_mul-armv8-vectors.txt   the hardware outputs the examples are generated from
-scripts/gen.py                        `asm!` front end + Lean emitter, proof skeletons
+PastaAsm/X86_64.lean                  x86-64 umbrella module
+PastaAsm/X86_64/Semantics.lean        x86-64 instruction semantics and eight-word product
+PastaAsm/X86_64/Transcription.lean    GENERATED: all six x86-64 assembly blocks
+PastaAsm/X86_64/Compositions.lean     split square, repeated squaring, backend contracts
+PastaAsm/X86_64/Vectors.lean          GENERATED: cross-backend reference checks
+PastaAsm/X86_64/Checks.lean           additional kernel-checked arithmetic examples
+scripts/gen.py                        shared bindings, vectors, skeletons, checks, and CLI
+scripts/asm_source.py                 shared Rust inline-assembly parser and validation
+scripts/gen_aarch64.py                AArch64 decoding, round factoring, and proof-fact hooks
+scripts/gen_x86_64.py                 x86-64 decoding, flag validation, and proof-fact hooks
 scripts/check.sh                      regenerate and diff, skeleton check (CI)
 scripts/check_nanoda.sh               re-check the build with an independent kernel (CI)
 ```
 
-Namespace `PastaAArch64Asm`, mirroring the package. The package is built with Lake from
+Shared declarations use namespace `PastaAsm`; architecture declarations use
+`PastaAsm.AArch64` and `PastaAsm.X86_64`. Shared modules do not import architecture-specific
+modules, so both models reuse them without depending on one another. The package is built with Lake from
 this directory (`lake build`), with Mathlib pinned in `lake-manifest.json`. `scripts/ci.sh` at
 the repository root runs these checks together with the crate's.
 
