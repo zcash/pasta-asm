@@ -9,9 +9,9 @@ architecture-specific models. The AArch64 backend has transcriptions and correct
 and `sub_entry_spec` theorems in `X86_64/Entry.lean`. `X86_64/Spec/Square.lean` proves
 the exact eight-limb square, its `squareHi` Montgomery reduction, and their `sqrMont` composition.
 `X86_64/Spec/FromMont.lean` proves the standalone conversion block for every four-limb input,
-including all four cancellation steps and the final conditional subtraction. Montgomery
-multiplication remains incomplete; the repeated-squaring-and-multiplication theorem and its
-entry-point theorem depend on that remaining proof.
+including all four cancellation steps and the final conditional subtraction. `X86_64/Spec/Mul.lean`
+proves Montgomery multiplication under both public operand contracts, using mechanically factored
+internal rounds. The repeated-squaring-and-multiplication and field-entry theorems are also proven.
 `X86_64/Spec.lean` exposes the completed block proofs; `Compositions.lean` mirrors Rust.
 `X86_64/Vectors.lean` contains 740 generated cross-backend checks against the existing
 AArch64 hardware corpus, not x86 hardware captures. Both fields are covered. Of the 312
