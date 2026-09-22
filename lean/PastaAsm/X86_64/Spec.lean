@@ -4,6 +4,12 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 -/
 import PastaAsm.X86_64.Spec.Arithmetic
 import PastaAsm.X86_64.Spec.Invert
+import PastaAsm.X86_64.Spec.Invert.Arithmetic
+import PastaAsm.X86_64.Spec.Invert.Adjustment
+import PastaAsm.X86_64.Spec.Invert.Compositions
+import PastaAsm.X86_64.Spec.Invert.Update
+import PastaAsm.X86_64.Spec.Invert.Normalize
+import PastaAsm.X86_64.Spec.Invert.Divsteps
 import PastaAsm.X86_64.Spec.Add
 import PastaAsm.X86_64.Spec.Sub
 import PastaAsm.X86_64.Spec.Mul

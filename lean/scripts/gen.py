@@ -729,6 +729,13 @@ SPEC_MANIFEST = {
     "lean/PastaAsm/X86_64/Spec/FromMont.lean": ("X86_64", ("fromMont",)),
     "lean/PastaAsm/X86_64/Spec/Mul.lean": ("X86_64", ("mulMont", "mulMontRound")),
     "lean/PastaAsm/X86_64/Spec/Square.lean": ("X86_64", ("squareLo", "squareHi")),
+    "lean/PastaAsm/X86_64/Spec/Invert/Arithmetic.lean": (
+        "X86_64", ("addWordsLimb", "mulSignedLimb", "normalizeNegative", "reduceOnce")),
+    "lean/PastaAsm/X86_64/Spec/Invert/Adjustment.lean": (
+        "X86_64", ("normalizeExcess", "updateAbShift")),
+    "lean/PastaAsm/X86_64/Spec/Invert/Divsteps/Round31.lean": ("X86_64", ("divsteps31Round",)),
+    "lean/PastaAsm/X86_64/Spec/Invert/Divsteps/Round47.lean": ("X86_64", ("divsteps47Round",)),
+    "lean/PastaAsm/X86_64/Spec/Invert/Divsteps.lean": ("X86_64", ("divsteps31", "divsteps47")),
 }
 
 # Missing proofs are tracked by routine, not by hypothetical files.
@@ -736,10 +743,6 @@ UNPROVED_ROUTINES = {
     "AArch64": (
         "divsteps31Round", "divsteps31", "updateAB", "addWords", "mulSigned",
         "divsteps47Round", "divsteps47", "normalizeCoefficient", "reduceOnce",
-    ),
-    "X86_64": (
-        "divsteps31Round", "divsteps31", "updateAbShift", "addWordsLimb", "mulSignedLimb",
-        "normalizeNegative", "normalizeExcess", "reduceOnce", "divsteps47Round", "divsteps47",
     ),
 }
 
