@@ -218,6 +218,15 @@ fn invert_matches_reference() {
         check_inverse(field, minus_small(&field.modulus, 1));
         check_inverse(field, minus_small(&field.modulus, 2));
 
+        // Regression cases whose wrapped inversion coefficients can leave a
+        // normalized high half at least twice the modulus. In particular, 91's
+        // Pallas high half requires all three conditional subtractions.
+        for value in [
+            11, 13, 15, 39, 67, 91, 101, 147, 153, 171, 175, 183, 195, 227, 245,
+        ] {
+            check_inverse(field, [value, 0, 0, 0]);
+        }
+
         // Exercise powers of two around every limb boundary and near the
         // field's most significant bit. Bit zero is already covered by ONE.
         for bit in [

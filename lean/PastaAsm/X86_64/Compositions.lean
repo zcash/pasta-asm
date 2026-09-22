@@ -171,7 +171,9 @@ def invert (value modulus : Limbs) (inv : Nat) : Limbs :=
   let coefficient := invertLincomb9 state.u state.v matrix.f1 matrix.g1
   let normalized := normalizeCoefficient coefficient modulus
   let low := fromMont normalized.1 modulus inv
-  let high := reduceOnce normalized.2 modulus
+  let high1 := reduceOnce normalized.2 modulus
+  let high2 := reduceOnce high1 modulus
+  let high := reduceOnce high2 modulus
   addMod low high modulus
 
 end PastaAsm.X86_64
