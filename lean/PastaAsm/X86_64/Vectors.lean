@@ -14,21 +14,27 @@ operands; they are not captures from x86-64 hardware. The multiplication vectors
 standalone `mulMont` block. The squaring vectors exercise `sqrMont`, the Rust composition
 `squareHi (squareLo value)`. The conversion vectors exercise x86-64's standalone `fromMont`
 assembly block, rather than AArch64's multiplication by one composition.
+
+The inversion vectors in `InvertVectors.lean` instead have mathematically derived expected
+results, not hardware captures. They exercise the full x86-64 `invert` composition, including
+its generated helpers and standalone Montgomery conversions, on all 34 distinct canonical
+corpus operands.
 -/
 
 namespace PastaAsm.X86_64
 
 /-- The x86-64 routines that the vectors exercise. -/
-def vectorBackend : VectorBackend := ⟨mulMont, sqrMont, fromMont⟩
+def vectorBackend : VectorBackend := ⟨mulMont, sqrMont, fromMont, invert⟩
 
-/-- The x86-64 blocks reproduce every reference vector. -/
-theorem vectors_reproduced : vectorBackend.failures = ([], [], []) :=
+/-- The x86-64 routines reproduce every reference vector, including inversion. -/
+theorem vectors_reproduced : vectorBackend.failures = ([], [], [], []) :=
   vectorBackend.failures_eq_nil
     (by intro k hk; unfold pieces at hk; interval_cases k <;> decide +kernel)
     (by decide +kernel) (by decide +kernel)
+    (by intro k hk; unfold pieces at hk; interval_cases k <;> decide +kernel)
 
 -- The evaluation names the vectors that fail, should any.
-/-- info: ([], [], []) -/
+/-- info: ([], [], [], []) -/
 #guard_msgs in
 #eval vectorBackend.failures
 

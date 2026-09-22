@@ -95,4 +95,16 @@ theorem fromMont_entry_spec (F : PastaField) (value : Limbs) (hv : value.Bounded
       R * (fromMont value F.modulus F.inv).toNat ≡ value.toNat [MOD F.modulus.toNat] :=
   fromMont_spec value F.modulus F.inv hv F.bounded F.shape F.inv_lt F.inv_spec _ rfl
 
+/-- The public `invert` contract at either supported Pasta field. Zero maps to zero;
+for a nonzero Montgomery input, the product with the canonical result is `R²` modulo `p`. -/
+theorem invert_entry_spec (F : PastaField) (hF : IsInversionField F) (value : Limbs)
+    (hv : value.Bounded) (h : isCanonical value F.modulus = true) :
+    (invert value F.modulus F.inv).Bounded ∧
+      (invert value F.modulus F.inv).toNat < F.modulus.toNat ∧
+      (if value.toNat = 0 then
+        invert value F.modulus F.inv = Limbs.ofNat 0
+      else
+        value.toNat * (invert value F.modulus F.inv).toNat ≡ R^2 [MOD F.modulus.toNat]) :=
+  invert_spec F hF value hv ((isCanonical_iff value F.modulus hv F.bounded).1 h)
+
 end PastaAsm.X86_64

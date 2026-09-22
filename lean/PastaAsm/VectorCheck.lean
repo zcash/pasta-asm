@@ -4,37 +4,41 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 -/
 import Mathlib.Tactic.IntervalCases
 import PastaAsm.Vectors
+import PastaAsm.InvertVectors
 
 /-!
 # Checking a backend against the reference vectors
 
-`Vectors.lean` holds the hardware corpus as data. A backend supplies its three routines as a
-`VectorBackend`, and `VectorBackend.failures` lists the vectors that the routines do not
+`Vectors.lean` holds the hardware corpus as data; `InvertVectors.lean` holds mathematically
+derived inversion results for canonical operands from that corpus, not hardware inversion
+captures. A backend supplies its four routines as a `VectorBackend`, and
+`VectorBackend.failures` lists the vectors that the routines do not
 reproduce. Each backend's `Vectors.lean` proves that the lists are empty by kernel evaluation
 (`decide +kernel`), and also evaluates them under `#guard_msgs`, so that a failure names the
 vectors that failed.
 
 The kernel checks a few dozen vectors several times faster, per vector, than the whole
-multiplication list at once, so `VectorBackend.failures_eq_nil` takes the multiplication check
-in `pieces` pieces, cut by index modulo `pieces`, and `failing_eq_nil_of_pieces` says that empty
-pieces mean an empty list.
+multiplication list at once, so `VectorBackend.failures_eq_nil` takes the multiplication and
+inversion checks in `pieces` pieces, cut by index modulo `pieces`, and
+`failing_eq_nil_of_pieces` says that empty pieces mean an empty list.
 -/
 
 namespace PastaAsm
 
 /-- The routines that the vectors exercise, as one backend transcribes them: Montgomery
-multiplication, Montgomery squaring, and the conversion out of Montgomery form, each taking the
-modulus limbs and `inv` last. -/
+multiplication, Montgomery squaring, conversion out of Montgomery form, and Montgomery
+inversion, each taking the modulus limbs and `inv` last. -/
 structure VectorBackend where
   mulMont : Limbs → Limbs → Limbs → Nat → Limbs
   sqrMont : Limbs → Limbs → Nat → Limbs
   fromMont : Limbs → Limbs → Nat → Limbs
+  invert : Limbs → Limbs → Nat → Limbs
 
 /-- The indices of the vectors that `reproduced` rejects. -/
 def failing {α : Type} (vectors : List (Nat × α)) (reproduced : α → Bool) : List Nat :=
   (vectors.filter fun (_, v) => !reproduced v).map (·.1)
 
-/-- The number of pieces that the multiplication vectors are checked in. -/
+/-- The number of pieces that the multiplication and inversion vectors are checked in. -/
 def pieces : Nat := 32
 
 /-- The indices of the vectors that `reproduced` rejects among those whose index is `k` modulo
@@ -69,20 +73,27 @@ def sqrOk (B : VectorBackend) : PastaField × Limbs × Limbs → Bool :=
 def fromOk (B : VectorBackend) : PastaField × Limbs × Limbs → Bool :=
   fun (F, a, r) => B.fromMont a F.modulus F.inv == r
 
-/-- The indices, into `mulVectors`, `sqrVectors`, and `fromVectors`, of the vectors that the
-backend does not reproduce. -/
-def failures (B : VectorBackend) : List Nat × List Nat × List Nat :=
-  (failing mulVectors B.mulOk, failing sqrVectors B.sqrOk, failing fromVectors B.fromOk)
+/-- Whether the backend reproduces a mathematically derived inversion vector. -/
+def invertOk (B : VectorBackend) : PastaField × Limbs × Limbs → Bool :=
+  fun (F, a, r) => B.invert a F.modulus F.inv == r
 
-/-- The backend reproduces every vector when each piece of the multiplication vectors, the
-squaring vectors, and the conversion vectors come out without failures; a backend proves the
-three premisses by kernel evaluation. -/
+/-- The indices, into `mulVectors`, `sqrVectors`, `fromVectors`, and `invertVectors`, of the
+vectors that the backend does not reproduce. -/
+def failures (B : VectorBackend) : List Nat × List Nat × List Nat × List Nat :=
+  (failing mulVectors B.mulOk, failing sqrVectors B.sqrOk, failing fromVectors B.fromOk,
+    failing invertVectors B.invertOk)
+
+/-- The backend reproduces every vector when each piece of the multiplication and inversion
+vectors, and the squaring and conversion vectors, come out without failures; a backend proves
+the four premisses by kernel evaluation. -/
 theorem failures_eq_nil (B : VectorBackend)
     (hmul : ∀ k, k < pieces → failingPiece mulVectors B.mulOk k = [])
-    (hsqr : failing sqrVectors B.sqrOk = []) (hfrom : failing fromVectors B.fromOk = []) :
-    B.failures = ([], [], []) := by
+    (hsqr : failing sqrVectors B.sqrOk = []) (hfrom : failing fromVectors B.fromOk = [])
+    (hinvert : ∀ k, k < pieces → failingPiece invertVectors B.invertOk k = []) :
+    B.failures = ([], [], [], []) := by
   unfold failures
-  rw [failing_eq_nil_of_pieces _ _ hmul, hsqr, hfrom]
+  rw [failing_eq_nil_of_pieces _ _ hmul, hsqr, hfrom,
+    failing_eq_nil_of_pieces _ _ hinvert]
 
 end VectorBackend
 

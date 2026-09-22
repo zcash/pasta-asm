@@ -18,6 +18,13 @@ in-contract vectors of the shared `Vectors.lean`, the existing AArch64 hardware 
 are cross-backend checks rather than x86 hardware captures. `Checks.lean` supplies additional
 kernel-checked arithmetic regressions.
 
+Both backends' `Vectors.lean` modules also evaluate their full inversion compositions against
+all 34 entries of the shared `InvertVectors.lean`. These use distinct canonical operands from
+the hardware corpus, but their expected inversion results are derived independently by modular
+arithmetic, not captured from hardware. Chunked `decide +kernel` proofs check every entry;
+`#guard_msgs` evaluations report failing indices for multiplication, squaring, conversion,
+and inversion separately.
+
 Both architectures use `scripts/gen.py`, with shared Rust `asm!` parsing and
 architecture-specific instruction emitters; `--check` compares generated output without
 rewriting it. The x86-64 emitter checks operand bindings and output order, read-only input-limb addresses,
@@ -94,6 +101,7 @@ PastaAsm/Compositions.lean            shared operand comparisons and contracts
 PastaAsm/Fields.lean                  the two fields and facts about their constants
 PastaAsm/Spec.lean                    shared arithmetic and limb lemmas
 PastaAsm/Vectors.lean                 GENERATED: the reference vectors inside the contracts
+PastaAsm/InvertVectors.lean           GENERATED: mathematical inversion reference vectors
 ../test-vectors/pasta_mul-armv8-vectors.txt   the hardware outputs the vectors are generated from
 PastaAsm/VectorCheck.lean             a backend's routines, and the vectors it fails
 PastaAsm/AArch64.lean                 AArch64 umbrella module

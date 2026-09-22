@@ -5,6 +5,7 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 import PastaAsm.Semantics
 import PastaAsm.Semantics.Inversion
 import PastaAsm.Fields
+import PastaAsm.Fields.Inversion
 import PastaAsm.Compositions
 import PastaAsm.Spec
 import PastaAsm.AArch64
