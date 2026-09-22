@@ -4,6 +4,12 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 -/
 import PastaAsm.Semantics
 import PastaAsm.Inversion
+import PastaAsm.InversionSpec
+import PastaAsm.InversionConvergence
+import PastaAsm.InversionRegularPrefix
+import PastaAsm.InversionDivergenceBoundary
+import PastaAsm.InversionFarLength
+import PastaAsm.InversionNormalization
 import PastaAsm.Fields
 import PastaAsm.InversionFields
 import PastaAsm.Compositions
