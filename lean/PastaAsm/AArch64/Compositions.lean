@@ -65,7 +65,9 @@ def invert (value modulus : Limbs) (inv : Nat) : Limbs :=
   let coefficient := invertLincomb state.u state.v row.f1 row.g1
   let split := normalizeCoefficient coefficient modulus
   let low := fromMont split.low modulus inv
-  let high := reduceOnce split.high modulus
+  let high1 := reduceOnce split.high modulus
+  let high2 := reduceOnce high1 modulus
+  let high := reduceOnce high2 modulus
   addMod low high modulus
 
 end PastaAsm.AArch64

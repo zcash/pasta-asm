@@ -35,9 +35,9 @@ type Wide = [u64; 9];
 /// The input is first taken out of Montgomery form. For nonzero input `x`,
 /// Semolina's coefficient is congruent to `x^-1 * R^2` modulo the modulus;
 /// Montgomery-reducing its 512-bit split yields the requested `x^-1 * R`.
-/// The normalized high half is below `2p`, so one conditional subtraction
-/// makes it canonical before adding it to the reduced low half. Zero maps
-/// to zero.
+/// The normalized high half is below `R = 2^256`. Every Pasta modulus is
+/// greater than `R / 4`, so three conditional subtractions make the high half
+/// canonical before adding it to the reduced low half. Zero maps to zero.
 ///
 /// # Safety contract
 ///
@@ -70,11 +70,13 @@ pub(crate) fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     let coefficient = lincomb(&u, &v, f1, g1);
     let (low, high) = normalize_coefficient(&coefficient, modulus);
 
-    // REDC(low + high*R) = from_mont(low) + high (mod p). The inherited
-    // final-coefficient bound for this fixed Pasta schedule places the selected
-    // representative below (2*modulus) << 256. Thus high < 2*modulus, so one
-    // subtraction suffices before the final addition of canonical residues.
+    // REDC(low + high*R) = from_mont(low) + high (mod p). Normalization returns
+    // high in four limbs, so high < R = 2^256. Both Pasta moduli are greater
+    // than R/4, hence high < 4*modulus. Three fixed conditional subtractions
+    // therefore make high canonical before the final addition.
     let low = crate::from_mont(&low, modulus, inv);
+    let high = reduce_once(high, modulus);
+    let high = reduce_once(high, modulus);
     let high = reduce_once(high, modulus);
     super::add(&low, &high, modulus)
 }
@@ -504,9 +506,9 @@ fn divsteps_47(a: u64, b: u64) -> (i64, i64) {
 ///
 /// For this fixed Pasta schedule, the signed coefficient's ninth limb is
 /// `-1`, `0`, or `1`. Semolina's `modx` is `2 * modulus`, the left-aligned
-/// 255-bit Pasta modulus. Adding or subtracting `modx << 256` leaves the low
-/// half unchanged and selects the representative in
-/// `[0, (2 * modulus) << 256)` required by the final split reduction.
+/// 255-bit Pasta modulus. Adding or subtracting `modx << 256` removes the
+/// signed excess while leaving the low half unchanged. The returned high half
+/// is an arbitrary four-limb value below `R = 2^256`.
 #[inline(always)]
 fn normalize_coefficient(value: &Wide, modulus: &Limbs) -> (Limbs, Limbs) {
     let low = [value[0], value[1], value[2], value[3]];
@@ -582,11 +584,11 @@ fn normalize_coefficient(value: &Wide, modulus: &Limbs) -> (Limbs, Limbs) {
     (low, [w4, w5, w6, w7])
 }
 
-/// Conditionally subtracts the modulus to canonicalize a value below twice it.
+/// Conditionally subtracts the modulus once.
 #[inline(always)]
 fn reduce_once(mut value: Limbs, modulus: &Limbs) -> Limbs {
-    // SAFETY: register-only subtraction and conditional selection. The caller's
-    // inherited coefficient bound guarantees that one subtraction is enough.
+    // SAFETY: register-only subtraction and conditional selection. This returns
+    // value unchanged below the modulus and value - modulus otherwise.
     unsafe {
         asm!(
             "subs {t0}, {r0}, {p0}",
