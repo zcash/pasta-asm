@@ -3,6 +3,7 @@ Copyright (c) 2026 the pasta-asm contributors.
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
 import PastaAsm.Semantics
+import PastaAsm.Semantics.Inversion
 import PastaAsm.Fields
 import PastaAsm.Compositions
 import PastaAsm.Spec

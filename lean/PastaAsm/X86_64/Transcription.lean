@@ -3,6 +3,7 @@ Copyright Supranational LLC (the routines, transcribed from Semolina v0.1.4).
 Copyright (c) 2026 the pasta-asm contributors (the transcription).
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
+import PastaAsm.Semantics.Inversion
 import PastaAsm.X86_64.Semantics
 
 /-!
@@ -25,8 +26,10 @@ Rust return-tuple order are parsed from the source rather than inferred here.
 
 namespace PastaAsm.X86_64
 
--- A mechanical transcription intentionally retains dead architectural results.
+-- A mechanical transcription intentionally retains dead architectural results and source
+-- operand names such as `zero`.
 set_option linter.unusedVariables false
+set_option linter.constructorNameAsVariable false
 
 /-- The inline `asm!` block of `add`: modular addition followed by its conditional reduction. -/
 def addMod (lhs rhs modulus : Limbs) : Limbs :=
@@ -986,5 +989,570 @@ def fromMont (value modulus : Limbs) (inv : Nat) : Limbs :=
   let z1 := cmovnc cf z1 z3      -- cmovnc {z1}, {z3}
   let z2 := cmovnc cf z2 z4      -- cmovnc {z2}, {z4}
   ⟨a, z0, z1, z2⟩
+
+/-- Apply a mechanically transcribed fixed-loop body a public number of times. -/
+def iterate {α : Type} (step : α → α) : Nat → α → α
+  | 0, s => s
+  | n + 1, s => iterate step n (step s)
+
+/-- Live register state of one factored 31-divstep inner-loop iteration. -/
+structure Divsteps31State where
+  a0 : Nat
+  a1 : Nat
+  a2 : Nat
+  a3 : Nat
+  b0 : Nat
+  b1 : Nat
+  b2 : Nat
+  b3 : Nat
+  t : Nat
+  deriving DecidableEq, Repr
+
+/-- Live register state of one factored final divstep iteration. -/
+structure Divsteps47State where
+  a : Nat
+  b : Nat
+  f0 : Nat
+  g0 : Nat
+  f1 : Nat
+  g1 : Nat
+  t0 : Nat
+  t1 : Nat
+  t2 : Nat
+  deriving DecidableEq, Repr
+
+/-- One mechanically factored iteration of the fixed 31-step inner loop. The factorer checks the
+source count, label, decrement, backedge, and exact body slice. -/
+def divsteps31Round (s : Divsteps31State) : Divsteps31State :=
+  let a0 := s.a0             -- input a0
+  let a1 := s.a1             -- input a1
+  let a2 := s.a2             -- input a2
+  let a3 := s.a3             -- input a3
+  let b0 := s.b0             -- input b0
+  let b1 := s.b1             -- input b1
+  let b2 := s.b2             -- input b2
+  let b3 := s.b3             -- input b3
+  let cf := (sbb a0 b0 0).2  -- cmp {a0}, {b0}
+  let b1 := a0               -- mov {b1}, {a0}
+  let b2 := b0               -- mov {b2}, {b0}
+  let b3 := a1               -- mov {b3}, {a1}
+  let t := a2                -- mov {t}, {a2}
+  let a0 := cmovc cf a0 b0   -- cmovb {a0}, {b0}
+  let b0 := cmovc cf b0 b1   -- cmovb {b0}, {b1}
+  let a1 := cmovc cf a1 a2   -- cmovb {a1}, {a2}
+  let a2 := cmovc cf a2 b3   -- cmovb {a2}, {b3}
+  let s := sbb a0 b0 0       -- sub {a0}, {b0}
+  let a0 := s.1              --   `-> a0
+  let cf := s.2              --   `-> cf
+  let s := sbb a1 a2 0       -- sub {a1}, {a2}
+  let a1 := s.1              --   `-> a1
+  let cf := s.2              --   `-> cf
+  let s := addc a1 a3 0      -- add {a1}, {a3}
+  let a1 := s.1              --   `-> a1
+  let cf := s.2              --   `-> cf
+  let test := bitAnd b1 1    -- test {b1}, 1
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag test    --   `-> zf
+  let a0 := cmovz zf a0 b1   -- cmovz {a0}, {b1}
+  let b0 := cmovz zf b0 b2   -- cmovz {b0}, {b2}
+  let a1 := cmovz zf a1 b3   -- cmovz {a1}, {b3}
+  let a2 := cmovz zf a2 t    -- cmovz {a2}, {t}
+  let a0 := lsr a0 1         -- shr {a0}, 1
+  let s := addc a2 a2 0      -- add {a2}, {a2}
+  let a2 := s.1              --   `-> a2
+  let cf := s.2              --   `-> cf
+  let s := sbb a2 a3 0       -- sub {a2}, {a3}
+  let a2 := s.1              --   `-> a2
+  let cf := s.2              --   `-> cf
+  ⟨a0, a1, a2, a3, b0, b1, b2, b3, t⟩
+
+/-- The complete 31-iteration approximation helper. -/
+def divsteps31 (a b : Limbs) : InvertMatrix :=
+  let a0 := a.l0                 -- input a0
+  let a1 := a.l1                 -- input a1
+  let a2 := a.l2                 -- input a2
+  let a3 := a.l3                 -- input a3
+  let b0 := b.l0                 -- input b0
+  let b1 := b.l1                 -- input b1
+  let b2 := b.l2                 -- input b2
+  let b3 := b.l3                 -- input b3
+  let t := a3                    -- mov {t}, {a3}
+  let t := bitOr t b3            -- or {t}, {b3}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag t           --   `-> zf
+  let a3 := cmovz zf a3 a2       -- cmovz {a3}, {a2}
+  let b3 := cmovz zf b3 b2       -- cmovz {b3}, {b2}
+  let a2 := cmovz zf a2 a1       -- cmovz {a2}, {a1}
+  let b2 := cmovz zf b2 b1       -- cmovz {b2}, {b1}
+  let a1 := cmovz zf a1 a0       -- cmovz {a1}, {a0}
+  let b1 := cmovz zf b1 b0       -- cmovz {b1}, {b0}
+  let t := a3                    -- mov {t}, {a3}
+  let t := bitOr t b3            -- or {t}, {b3}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag t           --   `-> zf
+  let a3 := cmovz zf a3 a2       -- cmovz {a3}, {a2}
+  let b3 := cmovz zf b3 b2       -- cmovz {b3}, {b2}
+  let a2 := cmovz zf a2 a1       -- cmovz {a2}, {a1}
+  let b2 := cmovz zf b2 b1       -- cmovz {b2}, {b1}
+  let t := a3                    -- mov {t}, {a3}
+  let t := bitOr t b3            -- or {t}, {b3}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag t           --   `-> zf
+  let rcx := (bsr t).getD 0      -- bsr rcx, {t}
+  let zf := zeroFlag t           --   `-> zf
+  let rcx := lea rcx 1           -- lea rcx, [rcx + 1]
+  let a3 := cmovz zf a3 a0       -- cmovz {a3}, {a0}
+  let b3 := cmovz zf b3 b0       -- cmovz {b3}, {b0}
+  let rcx := cmovz zf rcx t      -- cmovz rcx, {t}
+  let s := neg rcx               -- neg rcx
+  let rcx := s.1                 --   `-> rcx
+  let cf := s.2                  --   `-> cf
+  let a3 := shld a3 a2 rcx       -- shld {a3}, {a2}, cl
+  let b3 := shld b3 b2 rcx       -- shld {b3}, {b2}, cl
+  let t := word32 2147483647     -- mov {t:e}, 0x7fffffff
+  let a0 := bitAnd a0 t          -- and {a0}, {t}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag a0          --   `-> zf
+  let b0 := bitAnd b0 t          -- and {b0}, {t}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag b0          --   `-> zf
+  let t := bitNot t              -- not {t}
+  let a3 := bitAnd a3 t          -- and {a3}, {t}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag a3          --   `-> zf
+  let b3 := bitAnd b3 t          -- and {b3}, {t}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag b3          --   `-> zf
+  let a0 := bitOr a0 a3          -- or {a0}, {a3}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag a0          --   `-> zf
+  let b0 := bitOr b0 b3          -- or {b0}, {b3}
+  let cf := 0                    --   `-> cf
+  let ofl := 0                   --   `-> ofl
+  let zf := zeroFlag b0          --   `-> zf
+  let a1 := 9223372034707292160  -- movabs {a1}, 0x7fffffff80000000
+  let a2 := 9223372039002259455  -- movabs {a2}, 0x800000007fffffff
+  let a3 := 9223372034707292159  -- movabs {a3}, 0x7fffffff7fffffff
+  let rcx := word32 31           -- mov ecx, 31
+  let loop := iterate divsteps31Round 31 ⟨a0, a1, a2, a3, b0, b1, b2, b3, t⟩  -- factored fixed 31-iteration loop
+  let a0 := loop.a0              -- fixed loop output
+  let a1 := loop.a1              -- fixed loop output
+  let a2 := loop.a2              -- fixed loop output
+  let a3 := loop.a3              -- fixed loop output
+  let b0 := loop.b0              -- fixed loop output
+  let b1 := loop.b1              -- fixed loop output
+  let b2 := loop.b2              -- fixed loop output
+  let b3 := loop.b3              -- fixed loop output
+  let t := loop.t                -- fixed loop output
+  let a3 := lsr a3 32            -- shr {a3}, 32
+  let a0 := word32 (word32 a1)   -- mov {a0:e}, {a1:e}
+  let b0 := word32 (word32 a2)   -- mov {b0:e}, {a2:e}
+  let a1 := lsr a1 32            -- shr {a1}, 32
+  let a2 := lsr a2 32            -- shr {a2}, 32
+  let s := sbb a0 a3 0           -- sub {a0}, {a3}
+  let a0 := s.1                  --   `-> a0
+  let cf := s.2                  --   `-> cf
+  let s := sbb a1 a3 0           -- sub {a1}, {a3}
+  let a1 := s.1                  --   `-> a1
+  let cf := s.2                  --   `-> cf
+  let s := sbb b0 a3 0           -- sub {b0}, {a3}
+  let b0 := s.1                  --   `-> b0
+  let cf := s.2                  --   `-> cf
+  let s := sbb a2 a3 0           -- sub {a2}, {a3}
+  let a2 := s.1                  --   `-> a2
+  let cf := s.2                  --   `-> cf
+  ⟨a0, a1, b0, a2⟩
+
+/-- Outputs of the shift-and-absolute-value inversion helper block. -/
+structure UpdateAbResult where
+  value : Limbs
+  f : Nat
+  g : Nat
+  deriving DecidableEq, Repr
+
+/-- Carry state produced by one generic `add_words` assembly iteration. -/
+structure AddWordsLimbResult where
+  value : Nat
+  carry : Nat
+  deriving DecidableEq, Repr
+
+/-- Product and carry state produced by one generic `mul_signed` assembly iteration. -/
+structure MulSignedLimbResult where
+  low : Nat
+  high : Nat
+  negateCarry : Nat
+  deriving DecidableEq, Repr
+
+/-- High-half state after the first normalization assembly block. -/
+structure NormalizeNegativeResult where
+  h0 : Nat
+  h1 : Nat
+  h2 : Nat
+  h3 : Nat
+  excess : Nat
+  deriving DecidableEq, Repr
+
+/-- The `update_ab` assembly block: shift a five-word linear combination by 31, take its absolute
+value, and apply the sign correction to the row coefficients. -/
+def updateAbShift (value : PastaAsm.WideLimbs) (f g : Nat) : UpdateAbResult :=
+  let r0 := value.l0        -- input r0
+  let r1 := value.l1        -- input r1
+  let r2 := value.l2        -- input r2
+  let r3 := value.l3        -- input r3
+  let r4 := value.l4        -- input r4
+  let r0 := shrd r0 r1 31   -- shrd {r0}, {r1}, 31
+  let r1 := shrd r1 r2 31   -- shrd {r1}, {r2}, 31
+  let r2 := shrd r2 r3 31   -- shrd {r2}, {r3}, 31
+  let r3 := shrd r3 r4 31   -- shrd {r3}, {r4}, 31
+  let mask := r4            -- mov {mask}, {r4}
+  let mask := sar mask 63   -- sar {mask}, 63
+  let bit := mask           -- mov {bit}, {mask}
+  let bit := bitAnd bit 1   -- and {bit}, 1
+  let cf := 0               --   `-> cf
+  let ofl := 0              --   `-> ofl
+  let zf := zeroFlag bit    --   `-> zf
+  let r0 := bitXor r0 mask  -- xor {r0}, {mask}
+  let cf := 0               --   `-> cf
+  let ofl := 0              --   `-> ofl
+  let zf := zeroFlag r0     --   `-> zf
+  let r1 := bitXor r1 mask  -- xor {r1}, {mask}
+  let cf := 0               --   `-> cf
+  let ofl := 0              --   `-> ofl
+  let zf := zeroFlag r1     --   `-> zf
+  let r2 := bitXor r2 mask  -- xor {r2}, {mask}
+  let cf := 0               --   `-> cf
+  let ofl := 0              --   `-> ofl
+  let zf := zeroFlag r2     --   `-> zf
+  let r3 := bitXor r3 mask  -- xor {r3}, {mask}
+  let cf := 0               --   `-> cf
+  let ofl := 0              --   `-> ofl
+  let zf := zeroFlag r3     --   `-> zf
+  let s := addc r0 bit 0    -- add {r0}, {bit}
+  let r0 := s.1             --   `-> r0
+  let cf := s.2             --   `-> cf
+  let s := addc r1 0 cf     -- adc {r1}, 0
+  let r1 := s.1             --   `-> r1
+  let cf := s.2             --   `-> cf
+  let s := addc r2 0 cf     -- adc {r2}, 0
+  let r2 := s.1             --   `-> r2
+  let cf := s.2             --   `-> cf
+  let s := addc r3 0 cf     -- adc {r3}, 0
+  let r3 := s.1             --   `-> r3
+  let cf := s.2             --   `-> cf
+  ⟨⟨r0, r1, r2, r3⟩, word ((word f ^^^ mask) + bit), word ((word g ^^^ mask) + bit)⟩
+
+/-- One iteration of the generic `add_words` assembly block. The Rust loop applies it once per
+public limb and discards carry above the final limb. -/
+def addWordsLimb (lhs rhs carry : Nat) : AddWordsLimbResult :=
+  let lhs := lhs               -- input lhs[i]
+  let rhs := rhs               -- input rhs[i]
+  let carry := carry           -- input carry
+  let cf := bt carry 0         -- bt {carry}, 0
+  let s := addc lhs rhs cf     -- adc {lhs}, {rhs}
+  let lhs := s.1               --   `-> lhs
+  let cf := s.2                --   `-> cf
+  let s := sbb carry carry cf  -- sbb {carry}, {carry}
+  let carry := s.1             --   `-> carry
+  let cf := s.2                --   `-> cf
+  let s := neg carry           -- neg {carry}
+  let carry := s.1             --   `-> carry
+  let cf := s.2                --   `-> cf
+  ⟨lhs, carry⟩
+
+/-- One iteration of the generic `mul_signed` assembly block, including conditional two's-complement
+negation and one unsigned multiply-with-carry step. -/
+def mulSignedLimb (limb sign negateCarry magnitude productCarry : Nat) : MulSignedLimbResult :=
+  let limb := limb                   -- input limb
+  let sign := sign                   -- input sign
+  let negate_carry := negateCarry    -- input negate_carry
+  let magnitude := magnitude         -- input magnitude
+  let product_carry := productCarry  -- input product_carry
+  let limb := bitXor limb sign       -- xor {limb}, {sign}
+  let cf := 0                        --   `-> cf
+  let ofl := 0                       --   `-> ofl
+  let zf := zeroFlag limb            --   `-> zf
+  let s := addc limb negate_carry 0  -- add {limb}, {negate_carry}
+  let limb := s.1                    --   `-> limb
+  let cf := s.2                      --   `-> cf
+  let next_negate_carry := setc cf   -- setc {next_negate_carry}
+  let rax := limb                    -- mov rax, {limb}
+  let rdx := umulh rax magnitude     -- mul {magnitude}
+  let rax := mulLo rax magnitude     --   `-> rax
+  let s := addc rax product_carry 0  -- add rax, {product_carry}
+  let rax := s.1                     --   `-> rax
+  let cf := s.2                      --   `-> cf
+  let s := addc rdx 0 cf             -- adc rdx, 0
+  let rdx := s.1                     --   `-> rdx
+  let cf := s.2                      --   `-> cf
+  ⟨rax, rdx, next_negate_carry⟩
+
+/-- The first `normalize` assembly block: conditionally add the aligned doubled modulus when the
+coefficient is negative. -/
+def normalizeNegative (value : PastaAsm.WideLimbs) (modulus2 : Limbs) : NormalizeNegativeResult :=
+  let h0 := value.l4         -- input h0
+  let h1 := value.l5         -- input h1
+  let h2 := value.l6         -- input h2
+  let h3 := value.l7         -- input h3
+  let excess := value.l8     -- input excess
+  let m0 := modulus2.l0      -- input m0
+  let m1 := modulus2.l1      -- input m1
+  let m2 := modulus2.l2      -- input m2
+  let m3 := modulus2.l3      -- input m3
+  let mask := excess         -- mov {mask}, {excess}
+  let mask := sar mask 63    -- sar {mask}, 63
+  let m0 := bitAnd m0 mask   -- and {m0}, {mask}
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag m0      --   `-> zf
+  let m1 := bitAnd m1 mask   -- and {m1}, {mask}
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag m1      --   `-> zf
+  let m2 := bitAnd m2 mask   -- and {m2}, {mask}
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag m2      --   `-> zf
+  let m3 := bitAnd m3 mask   -- and {m3}, {mask}
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag m3      --   `-> zf
+  let s := addc h0 m0 0      -- add {h0}, {m0}
+  let h0 := s.1              --   `-> h0
+  let cf := s.2              --   `-> cf
+  let s := addc h1 m1 cf     -- adc {h1}, {m1}
+  let h1 := s.1              --   `-> h1
+  let cf := s.2              --   `-> cf
+  let s := addc h2 m2 cf     -- adc {h2}, {m2}
+  let h2 := s.1              --   `-> h2
+  let cf := s.2              --   `-> cf
+  let s := addc h3 m3 cf     -- adc {h3}, {m3}
+  let h3 := s.1              --   `-> h3
+  let cf := s.2              --   `-> cf
+  let s := addc excess 0 cf  -- adc {excess}, 0
+  let excess := s.1          --   `-> excess
+  let cf := s.2              --   `-> cf
+  ⟨h0, h1, h2, h3, excess⟩
+
+/-- The second `normalize` assembly block: add or subtract one aligned doubled modulus according to
+the remaining signed excess word. -/
+def normalizeExcess (high modulus2 : Limbs) (excess : Nat) : Limbs :=
+  let h0 := high.l0                    -- input h0
+  let h1 := high.l1                    -- input h1
+  let h2 := high.l2                    -- input h2
+  let h3 := high.l3                    -- input h3
+  let m0 := modulus2.l0                -- input m0
+  let m1 := modulus2.l1                -- input m1
+  let m2 := modulus2.l2                -- input m2
+  let m3 := modulus2.l3                -- input m3
+  let excess := excess                 -- input excess
+  let nonzero_mask := excess           -- mov {nonzero_mask}, {excess}
+  let negative_excess := excess        -- mov {negative_excess}, {excess}
+  let s := neg negative_excess         -- neg {negative_excess}
+  let negative_excess := s.1           --   `-> negative_excess
+  let cf := s.2                        --   `-> cf
+  let nonzero_mask := bitOr nonzero_mask negative_excess  -- or {nonzero_mask}, {negative_excess}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag nonzero_mask      --   `-> zf
+  let negative_excess := sar negative_excess 63  -- sar {negative_excess}, 63
+  let m0 := bitAnd m0 nonzero_mask     -- and {m0}, {nonzero_mask}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m0                --   `-> zf
+  let m1 := bitAnd m1 nonzero_mask     -- and {m1}, {nonzero_mask}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m1                --   `-> zf
+  let m2 := bitAnd m2 nonzero_mask     -- and {m2}, {nonzero_mask}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m2                --   `-> zf
+  let m3 := bitAnd m3 nonzero_mask     -- and {m3}, {nonzero_mask}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m3                --   `-> zf
+  let m0 := bitXor m0 negative_excess  -- xor {m0}, {negative_excess}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m0                --   `-> zf
+  let zero := bitXor32 0 0             -- xor {zero:e}, {zero:e}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag zero              --   `-> zf
+  let m1 := bitXor m1 negative_excess  -- xor {m1}, {negative_excess}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m1                --   `-> zf
+  let s := sbb zero negative_excess 0  -- sub {zero}, {negative_excess}
+  let zero := s.1                      --   `-> zero
+  let cf := s.2                        --   `-> cf
+  let m2 := bitXor m2 negative_excess  -- xor {m2}, {negative_excess}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m2                --   `-> zf
+  let m3 := bitXor m3 negative_excess  -- xor {m3}, {negative_excess}
+  let cf := 0                          --   `-> cf
+  let ofl := 0                         --   `-> ofl
+  let zf := zeroFlag m3                --   `-> zf
+  let s := addc m0 zero 0              -- add {m0}, {zero}
+  let m0 := s.1                        --   `-> m0
+  let cf := s.2                        --   `-> cf
+  let s := addc m1 0 cf                -- adc {m1}, 0
+  let m1 := s.1                        --   `-> m1
+  let cf := s.2                        --   `-> cf
+  let s := addc m2 0 cf                -- adc {m2}, 0
+  let m2 := s.1                        --   `-> m2
+  let cf := s.2                        --   `-> cf
+  let s := addc m3 0 cf                -- adc {m3}, 0
+  let m3 := s.1                        --   `-> m3
+  let cf := s.2                        --   `-> cf
+  let s := addc h0 m0 0                -- add {h0}, {m0}
+  let h0 := s.1                        --   `-> h0
+  let cf := s.2                        --   `-> cf
+  let s := addc h1 m1 cf               -- adc {h1}, {m1}
+  let h1 := s.1                        --   `-> h1
+  let cf := s.2                        --   `-> cf
+  let s := addc h2 m2 cf               -- adc {h2}, {m2}
+  let h2 := s.1                        --   `-> h2
+  let cf := s.2                        --   `-> cf
+  let s := addc h3 m3 cf               -- adc {h3}, {m3}
+  let h3 := s.1                        --   `-> h3
+  let cf := s.2                        --   `-> cf
+  ⟨h0, h1, h2, h3⟩
+
+/-- The `reduce_once` assembly block: subtract one Pasta modulus and conditionally add it back. -/
+def reduceOnce (value modulus : Limbs) : Limbs :=
+  let r0 := value.l0           -- input value[0]
+  let r1 := value.l1           -- input value[1]
+  let r2 := value.l2           -- input value[2]
+  let r3 := value.l3           -- input value[3]
+  let p0 := modulus.l0         -- input p0
+  let p1 := modulus.l1         -- input p1
+  let p3 := modulus.l3         -- input p3
+  let s := sbb r0 p0 0         -- sub {r0}, {p0}
+  let r0 := s.1                --   `-> r0
+  let cf := s.2                --   `-> cf
+  let s := sbb r1 p1 cf        -- sbb {r1}, {p1}
+  let r1 := s.1                --   `-> r1
+  let cf := s.2                --   `-> cf
+  let s := sbb r2 0 cf         -- sbb {r2}, 0
+  let r2 := s.1                --   `-> r2
+  let cf := s.2                --   `-> cf
+  let s := sbb r3 p3 cf        -- sbb {r3}, {p3}
+  let r3 := s.1                --   `-> r3
+  let cf := s.2                --   `-> cf
+  let zero := word32 0         -- mov {zero:e}, 0
+  let p0 := cmovnc cf p0 zero  -- cmovnc {p0}, {zero}
+  let p1 := cmovnc cf p1 zero  -- cmovnc {p1}, {zero}
+  let p3 := cmovnc cf p3 zero  -- cmovnc {p3}, {zero}
+  let s := addc r0 p0 0        -- add {r0}, {p0}
+  let r0 := s.1                --   `-> r0
+  let cf := s.2                --   `-> cf
+  let s := addc r1 p1 cf       -- adc {r1}, {p1}
+  let r1 := s.1                --   `-> r1
+  let cf := s.2                --   `-> cf
+  let s := addc r2 0 cf        -- adc {r2}, 0
+  let r2 := s.1                --   `-> r2
+  let cf := s.2                --   `-> cf
+  let s := addc r3 p3 cf       -- adc {r3}, {p3}
+  let r3 := s.1                --   `-> r3
+  let cf := s.2                --   `-> cf
+  ⟨r0, r1, r2, r3⟩
+
+/-- One mechanically factored iteration of the fixed final 47-step loop. The factorer checks the
+source count, label, decrement, backedge, and exact body slice. -/
+def divsteps47Round (s : Divsteps47State) : Divsteps47State :=
+  let a := s.a               -- input a
+  let b := s.b               -- input b
+  let f0 := s.f0             -- input f0
+  let g0 := s.g0             -- input g0
+  let f1 := s.f1             -- input f1
+  let g1 := s.g1             -- input g1
+  let t0 := bitXor32 0 0     -- xor {t0:e}, {t0:e}
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag t0      --   `-> zf
+  let test := bitAnd a 1     -- test {a}, 1
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag test    --   `-> zf
+  let t1 := b                -- mov {t1}, {b}
+  let t0 := cmovnz zf t0 b   -- cmovnz {t0}, {b}
+  let s := sbb t1 a 0        -- sub {t1}, {a}
+  let t1 := s.1              --   `-> t1
+  let cf := s.2              --   `-> cf
+  let t2 := a                -- mov {t2}, {a}
+  let s := sbb a t0 0        -- sub {a}, {t0}
+  let a := s.1               --   `-> a
+  let cf := s.2              --   `-> cf
+  let a := cmovc cf a t1     -- cmovc {a}, {t1}
+  let b := cmovc cf b t2     -- cmovc {b}, {t2}
+  let t0 := f0               -- mov {t0}, {f0}
+  let f0 := cmovc cf f0 f1   -- cmovc {f0}, {f1}
+  let f1 := cmovc cf f1 t0   -- cmovc {f1}, {t0}
+  let t1 := g0               -- mov {t1}, {g0}
+  let g0 := cmovc cf g0 g1   -- cmovc {g0}, {g1}
+  let g1 := cmovc cf g1 t1   -- cmovc {g1}, {t1}
+  let t0 := bitXor32 0 0     -- xor {t0:e}, {t0:e}
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag t0      --   `-> zf
+  let t1 := bitXor32 0 0     -- xor {t1:e}, {t1:e}
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag t1      --   `-> zf
+  let a := lsr a 1           -- shr {a}, 1
+  let test := bitAnd t2 1    -- test {t2}, 1
+  let cf := 0                --   `-> cf
+  let ofl := 0               --   `-> ofl
+  let zf := zeroFlag test    --   `-> zf
+  let t0 := cmovnz zf t0 f1  -- cmovnz {t0}, {f1}
+  let t1 := cmovnz zf t1 g1  -- cmovnz {t1}, {g1}
+  let s := addc f1 f1 0      -- add {f1}, {f1}
+  let f1 := s.1              --   `-> f1
+  let cf := s.2              --   `-> cf
+  let s := addc g1 g1 0      -- add {g1}, {g1}
+  let g1 := s.1              --   `-> g1
+  let cf := s.2              --   `-> cf
+  let s := sbb f0 t0 0       -- sub {f0}, {t0}
+  let f0 := s.1              --   `-> f0
+  let cf := s.2              --   `-> cf
+  let s := sbb g0 t1 0       -- sub {g0}, {t1}
+  let g0 := s.1              --   `-> g0
+  let cf := s.2              --   `-> cf
+  ⟨a, b, f0, g0, f1, g1, t0, t1, t2⟩
+
+/-- The complete fixed 47-low-limb iteration helper. -/
+def divsteps47 (a b : Nat) : InvertMatrix :=
+  let a := a              -- input a
+  let b := b              -- input b
+  let f0 := 1             -- input f0
+  let g0 := 0             -- input g0
+  let f1 := 0             -- input f1
+  let g1 := 1             -- input g1
+  let count := word32 47  -- mov {count:e}, 47
+  let t0 := 0             -- unread scratch initialization
+  let t1 := 0             -- unread scratch initialization
+  let t2 := 0             -- unread scratch initialization
+  let loop := iterate divsteps47Round 47 ⟨a, b, f0, g0, f1, g1, t0, t1, t2⟩  -- factored fixed 47-iteration loop
+  let a := loop.a         -- fixed loop output
+  let b := loop.b         -- fixed loop output
+  let f0 := loop.f0       -- fixed loop output
+  let g0 := loop.g0       -- fixed loop output
+  let f1 := loop.f1       -- fixed loop output
+  let g1 := loop.g1       -- fixed loop output
+  let t0 := loop.t0       -- fixed loop output
+  let t1 := loop.t1       -- fixed loop output
+  let t2 := loop.t2       -- fixed loop output
+  ⟨f0, g0, f1, g1⟩
 
 end PastaAsm.X86_64

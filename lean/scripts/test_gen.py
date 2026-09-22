@@ -220,11 +220,12 @@ class AArch64WriteDirectionTests(unittest.TestCase):
 
 
 class AArch64OperandCountTests(unittest.TestCase):
-    def test_shifted_add_is_rejected(self):
-        emitter = gen_aarch64.Emitter([])
-        with self.assertRaisesRegex(ValueError, "adds expects 3 operands"):
-            emitter.step("adds", gen_aarch64.tokenize("r0, r0, b0, lsl #1"),
-                         "adds r0, r0, b0, lsl #1")
+    def test_unsupported_shift_modifier_is_rejected(self):
+        emitter = gen_aarch64.Emitter([], {"r0": "inout", "b0": "in"})
+        emitter.known.update(("r0", "b0"))
+        with self.assertRaisesRegex(ValueError, "unsupported shifted operand"):
+            emitter.step("adds", gen_aarch64.tokenize("r0, r0, b0, ror #1"),
+                         "adds r0, r0, b0, ror #1")
 
     def test_missing_and_extra_operands_are_rejected_before_reads(self):
         arities = {"mov": 2, "mul": 3, "umulh": 3, "lsl": 3, "lsr": 3,
@@ -661,7 +662,9 @@ class SharedGeneratorTests(unittest.TestCase):
         routines = gen_x86_64.all_routines()
         self.assertEqual(
             [routine.name for routine in routines],
-            ["addMod", "subMod", "mulMontRound", "mulMont", "squareLo", "squareHi", "fromMont"],
+            ["addMod", "subMod", "mulMontRound", "mulMont", "squareLo", "squareHi", "fromMont",
+             "divsteps31Round", "divsteps31", "updateAbShift", "addWordsLimb", "mulSignedLimb",
+             "normalizeNegative", "normalizeExcess", "reduceOnce", "divsteps47Round", "divsteps47"],
         )
         for routine in routines:
             with self.subTest(routine=routine.name):
