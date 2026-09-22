@@ -18,6 +18,37 @@ namespace PastaAsm
 /-- The register width, as the modulus of every register write. -/
 abbrev regMod : Nat := 2^64
 
+/-- The low 64 bits of a register value. -/
+def word (a : Nat) : Nat := a % regMod
+
+/-- The zero flag of a 64-bit result, shared by both instruction sets. -/
+def zeroFlag (a : Nat) : Nat := if word a = 0 then 1 else 0
+
+/-- Truncating a register establishes its word bound. -/
+theorem word_lt (a : Nat) : word a < regMod := Nat.mod_lt _ (by decide)
+
+/-- Truncation does not change an already bounded register. -/
+theorem word_eq_of_lt {a : Nat} (h : a < regMod) : word a = a := Nat.mod_eq_of_lt h
+
+@[simp] theorem word_word (a : Nat) : word (word a) = word a := Nat.mod_mod _ _
+
+@[simp] theorem word_zero : word 0 = 0 := rfl
+
+/-- The zero flag is a bit. -/
+theorem zeroFlag_le_one (a : Nat) : zeroFlag a ≤ 1 := by
+  unfold zeroFlag
+  split <;> decide
+
+/-- The zero flag is set precisely for a zero word. -/
+theorem zeroFlag_eq_one_iff (a : Nat) : zeroFlag a = 1 ↔ word a = 0 := by
+  unfold zeroFlag
+  split <;> simp_all
+
+/-- The zero flag is clear precisely for a nonzero word. -/
+theorem zeroFlag_eq_zero_iff (a : Nat) : zeroFlag a = 0 ↔ word a ≠ 0 := by
+  unfold zeroFlag
+  split <;> simp_all
+
 /-- `mul`: the low 64 bits of the product. -/
 def mulLo (a b : Nat) : Nat := a * b % regMod
 

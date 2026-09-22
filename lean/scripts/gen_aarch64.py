@@ -4,8 +4,10 @@
 The shared fail-closed Rust/``asm!`` parser feeds this architecture-specific
 instruction emitter. It produces
 
-- `lean/PastaAsm/AArch64/Transcription.lean`: the AArch64 blocks as Lean definitions; and
-- `lean/PastaAsm/AArch64/Vectors.lean`: kernel-checked AArch64 reference vectors.
+- `lean/PastaAsm/AArch64/Transcription.lean`: the AArch64 blocks as Lean definitions;
+- `lean/PastaAsm/AArch64/Vectors.lean`: kernel-checked AArch64 reference vectors; and
+- `lean/PastaAsm/AArch64/InvertVectors.lean`: kernel-checked inversion-composition vectors
+  with independently derived mathematical expectations.
 
 Invoke it through ``python3 lean/scripts/gen.py``.
 
@@ -34,16 +36,20 @@ The script also generates the mechanical part of each block's correctness proof 
 `-- BEGIN ... -- END` annotation blocks are removed; the check script runs that too.
 Python 3.9+; stdlib only.
 """
+import dataclasses
 import re
 from pathlib import Path
+from typing import Dict, Optional, Sequence, Tuple
 
 import asm_source
 import gen
 
 INLINE = Path("src/aarch64.rs")
+INVERT = Path("src/aarch64/invert.rs")
 VECTORS = gen.VECTORS
 OUT_PROGRAM = Path("lean/PastaAsm/AArch64/Transcription.lean")
 OUT_VECTORS = Path("lean/PastaAsm/AArch64/Vectors.lean")
+OUT_INVERT_VECTORS = Path("lean/PastaAsm/AArch64/InvertVectors.lean")
 
 HEADER = """/-
 Copyright Supranational LLC (the routines, transcribed from Semolina v0.1.4).
@@ -107,6 +113,158 @@ INLINE_ROUTINES = [
      ["lhs", "rhs", "modulus"]),
 ]
 
+
+@dataclasses.dataclass(frozen=True)
+class InvertRoutineConfig:
+    rust_name: str
+    lean_name: str
+    signature: str
+    regions: Tuple[Tuple[str, str], ...]
+    args: Tuple[Tuple[str, str], ...]
+    result_type: str
+    result_fields: Tuple[str, ...]
+    doc: str
+    loop_count: Optional[int] = None
+    local_inputs: Tuple[Tuple[str, str], ...] = ()
+
+
+D = asm_source.Declaration
+
+
+INVERT_DECLARATIONS = {
+    "divsteps_31": (
+        *(D(name, "inout", name, "_") for name in
+          ("a0", "a1", "a2", "a3", "b0", "b1", "b2", "b3")),
+        D("fg0", "inout", "0x7fff_ffff_8000_0000_u64", "_"),
+        D("fg1", "inout", "0x8000_0000_7fff_ffff_u64", "_"),
+        D("bias", "inout", "0x7fff_ffff_7fff_ffff_u64", "_"),
+        D("cnt", "inout", "31_u64", "_"),
+        *(D(name, "out", name, name) for name in ("f0", "g0", "f1", "g1")),
+        *(D(name, "out", "_", "_") for name in ("t0", "t1", "t2", "t3")),
+    ),
+    "update_ab": (
+        *(D(name, "inout", name, name) for name in ("a0", "a1", "a2", "a3")),
+        *(D(name, "inout", name, "_") for name in ("b0", "b1", "b2", "b3")),
+        D("f", "inout", "f", "f"), D("g", "inout", "g", "g"),
+        *(D(name, "out", "_", "_") for name in
+          ("t0", "t1", "t2", "t3", "t4", "t5", "t6")),
+    ),
+    "add_words": (
+        *(D(f"o{i}", "inout", f"lhs[{i}]", f"o{i}") for i in range(9)),
+        *(D(f"r{i}", "in", f"rhs[{i}]", None) for i in range(9)),
+    ),
+    "mul_signed": (
+        D("scalar", "in", "scalar", None),
+        *(D(f"o{i}", "inout", f"value[{i}]", f"o{i}") for i in range(9)),
+        *(D(name, "out", "_", "_") for name in ("sign", "mag", "carry", "hi")),
+    ),
+    "divsteps_47": (
+        D("a", "inout", "a", "_"), D("b", "inout", "b", "_"),
+        D("cnt", "inout", "47_u64", "_"),
+        D("f0", "inout", "1_i64", "_"), D("g0", "inout", "0_i64", "_"),
+        D("f1", "inout", "0_i64", "f1"), D("g1", "inout", "1_i64", "g1"),
+        *(D(name, "out", "_", "_") for name in ("odd", "t0", "t1", "t2")),
+    ),
+    "normalize_coefficient": (
+        D("p0", "in", "modulus[0]", None), D("p1", "in", "modulus[1]", None),
+        *(D(f"w{i}", "inout", f"value[{i}]", f"w{i}") for i in range(4, 8)),
+        D("w8", "inout", "value[8]", "_"),
+        *(D(name, "out", "_", "_") for name in
+          ("sign", "excess", "m4", "m5", "m6", "m7", "tmp")),
+    ),
+    "reduce_once": (
+        *(D(f"r{i}", "inout", f"value[{i}]", f"value[{i}]") for i in range(4)),
+        *(D(f"p{i}", "in", f"modulus[{i}]", None) for i in range(4)),
+        *(D(f"t{i}", "out", "_", "_") for i in range(4)),
+    ),
+}
+
+
+INVERT_ROUTINES = (
+    InvertRoutineConfig(
+        "divsteps_31", "divsteps31",
+        "fn divsteps_31(a: &Limbs, b: &Limbs) -> Matrix",
+        (("before asm", """
+            let [a0, a1, a2, a3] = *a;
+            let [b0, b1, b2, b3] = *b;
+            let (f0, g0, f1, g1): (i64, i64, i64, i64);
+            unsafe {
+        """), ("after asm", "; } Matrix { f0, g0, f1, g1 }")),
+        (("a", "Limbs"), ("b", "Limbs")), "InvertMatrix", ("f0", "g0", "f1", "g1"),
+        "The 31-step approximation helper, including its checked fixed-count inner loop. "
+        "Signed matrix entries are represented by their 64-bit register bitpatterns.",
+        loop_count=31,
+        local_inputs=(("a0", "a.l0"), ("a1", "a.l1"), ("a2", "a.l2"), ("a3", "a.l3"),
+                      ("b0", "b.l0"), ("b1", "b.l1"), ("b2", "b.l2"), ("b3", "b.l3")),
+    ),
+    InvertRoutineConfig(
+        "update_ab", "updateAB",
+        "fn update_ab(a: &Limbs, b: &Limbs, mut f: i64, mut g: i64) -> (Limbs, i64, i64)",
+        (("before asm", """
+            let [mut a0, mut a1, mut a2, mut a3] = *a;
+            let [b0, b1, b2, b3] = *b;
+            unsafe {
+        """), ("after asm", "; } ([a0, a1, a2, a3], f, g)")),
+        (("a", "Limbs"), ("b", "Limbs"), ("f", "Nat"), ("g", "Nat")),
+        "UpdateABResult", ("a0", "a1", "a2", "a3", "f", "g"),
+        "The signed fixed-width matrix-row update of one GCD state, shifted by 31 bits.",
+        local_inputs=(("a0", "a.l0"), ("a1", "a.l1"), ("a2", "a.l2"), ("a3", "a.l3"),
+                      ("b0", "b.l0"), ("b1", "b.l1"), ("b2", "b.l2"), ("b3", "b.l3")),
+    ),
+    InvertRoutineConfig(
+        "add_words", "addWords",
+        "fn add_words(lhs: &Wide, rhs: &Wide) -> Wide",
+        (("before asm", """
+            let (o0, o1, o2, o3, o4, o5, o6, o7, o8):
+              (u64, u64, u64, u64, u64, u64, u64, u64, u64);
+            unsafe {
+        """), ("after asm", "; } [o0, o1, o2, o3, o4, o5, o6, o7, o8]")),
+        (("lhs", "WideLimbs"), ("rhs", "WideLimbs")), "WideLimbs",
+        tuple(f"o{i}" for i in range(9)),
+        "Addition of two nine-word coefficient bitpatterns modulo 2^576.",
+    ),
+    InvertRoutineConfig(
+        "mul_signed", "mulSigned",
+        "fn mul_signed(value: &Wide, scalar: i64) -> Wide",
+        (("before asm", """
+            let (o0, o1, o2, o3, o4, o5, o6, o7, o8):
+              (u64, u64, u64, u64, u64, u64, u64, u64, u64);
+            unsafe {
+        """), ("after asm", "; } [o0, o1, o2, o3, o4, o5, o6, o7, o8]")),
+        (("value", "WideLimbs"), ("scalar", "Nat")), "WideLimbs",
+        tuple(f"o{i}" for i in range(9)),
+        "Multiplication of a nine-word signed bitpattern by a signed scalar bitpattern modulo 2^576.",
+    ),
+    InvertRoutineConfig(
+        "divsteps_47", "divsteps47",
+        "fn divsteps_47(a: u64, b: u64) -> (i64, i64)",
+        (("before asm", "let (f1, g1): (i64, i64); unsafe {"),
+         ("after asm", "; } (f1, g1)")),
+        (("a", "Nat"), ("b", "Nat")), "InvertRow", ("f1", "g1"),
+        "The second transition row after the checked fixed-count final 47 low-limb steps.",
+        loop_count=47,
+    ),
+    InvertRoutineConfig(
+        "normalize_coefficient", "normalizeCoefficient",
+        "fn normalize_coefficient(value: &Wide, modulus: &Limbs) -> (Limbs, Limbs)",
+        (("before asm", """
+            let low = [value[0], value[1], value[2], value[3]];
+            let (w4, w5, w6, w7): (u64, u64, u64, u64);
+            unsafe {
+        """), ("after asm", "; } (low, [w4, w5, w6, w7])")),
+        (("value", "WideLimbs"), ("modulus", "Limbs")), "CoefficientSplit",
+        ("w4", "w5", "w6", "w7"),
+        "The final signed coefficient adjustment; the low half is unchanged and the adjusted high half is returned.",
+    ),
+    InvertRoutineConfig(
+        "reduce_once", "reduceOnce",
+        "fn reduce_once(mut value: Limbs, modulus: &Limbs) -> Limbs",
+        (("before asm", "unsafe {"), ("after asm", "; } value")),
+        (("value", "Limbs"), ("modulus", "Limbs")), "Limbs", ("r0", "r1", "r2", "r3"),
+        "One conditional subtraction of the modulus from a value known to be below twice it.",
+    ),
+)
+
 def tokenize(rest):
     return re.findall(r"\[[^\]]*\]!?|[^,\s]+", rest)
 
@@ -121,6 +279,20 @@ def imm(tok):
     return eval(s)
 
 
+def shift_imm(tok, instruction):
+    value = imm(tok)
+    if not 0 <= value < 64:
+        raise ValueError(f"shift immediate outside 0..63: {instruction}")
+    return value
+
+
+def bitfield_imms(lsb_token, width_token, instruction):
+    lsb, width = imm(lsb_token), imm(width_token)
+    if lsb < 0 or width <= 0 or lsb + width > 64:
+        raise ValueError(f"invalid bitfield range: {instruction}")
+    return lsb, width
+
+
 class Emitter(gen.Emitter):
     """AArch64 instruction decoder backed by the shared binding and liveness IR."""
 
@@ -128,6 +300,7 @@ class Emitter(gen.Emitter):
         super().__init__()
         self.ins = ins
         self.directions = directions or {}
+        self.zero_condition_valid = False
 
     def read(self, tok):
         if tok == "xzr":
@@ -139,18 +312,40 @@ class Emitter(gen.Emitter):
         self.cur_reads.add(tok)
         return tok
 
+    def shifted(self, tokens, start, instruction):
+        """Read one register operand and its optional AArch64 shift modifier."""
+        value = self.read(tokens[start])
+        remaining = tokens[start + 1:]
+        if not remaining:
+            return value
+        if len(remaining) != 2 or remaining[0] not in ("asr", "lsl", "lsr"):
+            raise ValueError(f"unsupported shifted operand: {' '.join(tokens[start:])}")
+        shift = shift_imm(remaining[1], instruction)
+        semantics = {"asr": "asr", "lsl": "lsl", "lsr": "lsr"}[remaining[0]]
+        return f"({semantics} {value} {shift})"
+
     def bind(self, name, expr, comment, reads=None, load=False, fact=None, note=None):
         if name != "xzr":
             super().bind(name, expr, comment, reads=reads, load=load, fact=fact, note=note)
 
     def step(self, op, t, text):
-        arity = {"mov": 2, "mul": 3, "umulh": 3, "lsl": 3, "lsr": 3,
-                 "adds": 3, "adcs": 3, "adc": 3, "subs": 3, "sbcs": 3, "csel": 4}
-        if op not in arity:
+        fixed_arity = {
+            "mov": 2, "mul": 3, "umulh": 3, "lsl": 3, "lsr": 3,
+            "asr": 3, "lslv": 3, "lsrv": 3, "neg": 2, "eor": 3,
+            "clz": 2, "extr": 4, "sbfx": 4, "ubfx": 4, "bfxil": 4,
+            "cmp": 2, "csel": 4,
+        }
+        variable_arity = {"add": (3, 5), "sub": (3, 5), "and": (3, 5),
+                          "orr": (3, 5), "adds": (3, 5), "adcs": (3, 5),
+                          "adc": (3, 5), "subs": (3, 5), "sbcs": (3, 5)}
+        if op in fixed_arity and len(t) != fixed_arity[op]:
+            raise ValueError(f"{op} expects {fixed_arity[op]} operands, got {len(t)}: {text}")
+        if op in variable_arity and len(t) not in variable_arity[op]:
+            expected = " or ".join(str(n) for n in variable_arity[op])
+            raise ValueError(f"{op} expects {expected} operands, got {len(t)}: {text}")
+        if op not in fixed_arity and op not in variable_arity:
             raise ValueError(f"unhandled instruction: {text}")
-        if len(t) != arity[op]:
-            raise ValueError(f"{op} expects {arity[op]} operands, got {len(t)}: {text}")
-        if t[0] != "xzr":
+        if op != "cmp" and t[0] != "xzr":
             if self.directions.get(t[0]) == "in":
                 raise ValueError(f"input-only register {t[0]} cannot be written: {text}")
             if t[0] not in self.directions:
@@ -165,16 +360,44 @@ class Emitter(gen.Emitter):
         elif op == "umulh":
             a, b = self.read(t[1]), self.read(t[2])
             self.bind(t[0], f"umulh {a} {b}", text, fact=("umulh", a, b))
-        elif op == "lsl":
-            a, k = self.read(t[1]), imm(t[2])
-            self.bind(t[0], f"lsl {a} {k}", text, fact=("lsl", a, k))
-        elif op == "lsr":
-            a, k = self.read(t[1]), imm(t[2])
-            self.bind(t[0], f"lsr {a} {k}", text, fact=("lsr", a, k))
+        elif op in ("lsl", "lsr", "asr"):
+            a, k = self.read(t[1]), shift_imm(t[2], text)
+            semantics = {"lsl": "lsl", "lsr": "lsr", "asr": "asr"}[op]
+            self.bind(t[0], f"{semantics} {a} {k}", text, fact=(op, a, k))
+        elif op in ("lslv", "lsrv"):
+            a, k = self.read(t[1]), self.read(t[2])
+            self.bind(t[0], f"{op} {a} {k}", text, fact=(op, a, k))
+        elif op in ("add", "sub", "and", "orr"):
+            a, b = self.read(t[1]), self.shifted(t, 2, text)
+            semantics = {"add": "add", "sub": "sub", "and": "bitAnd", "orr": "orr"}[op]
+            self.bind(t[0], f"{semantics} {a} {b}", text, fact=(op, a, b))
+        elif op == "eor":
+            a, b = self.read(t[1]), self.read(t[2])
+            self.bind(t[0], f"eor {a} {b}", text, fact=("eor", a, b))
+        elif op == "neg":
+            a = self.read(t[1])
+            self.bind(t[0], f"neg {a}", text, fact=("neg", a))
+        elif op == "clz":
+            a = self.read(t[1])
+            self.bind(t[0], f"clz {a}", text, fact=("clz", a))
+        elif op == "extr":
+            hi, lo, k = self.read(t[1]), self.read(t[2]), shift_imm(t[3], text)
+            self.bind(t[0], f"extr {hi} {lo} {k}", text, fact=("extr", hi, lo, k))
+        elif op in ("sbfx", "ubfx"):
+            a = self.read(t[1])
+            start, width = bitfield_imms(t[2], t[3], text)
+            self.bind(t[0], f"{op} {a} {start} {width}", text,
+                      fact=(op, a, start, width))
+        elif op == "bfxil":
+            old, src = self.read(t[0]), self.read(t[1])
+            start, width = bitfield_imms(t[2], t[3], text)
+            self.bind(t[0], f"bfxil {old} {src} {start} {width}", text,
+                      fact=("bfxil", old, src, start, width))
         elif op in ("adds", "adcs", "adc"):
             cin = "0" if op == "adds" else self.read("c")
-            a, b = self.read(t[1]), self.read(t[2])
+            a, b = self.read(t[1]), self.shifted(t, 2, text)
             expr = f"addc {a} {b} {cin}"
+            self.zero_condition_valid = False
             if op == "adc":
                 self.bind(t[0], f"({expr}).1", text, fact=("adc", a, b, cin))
             else:
@@ -183,35 +406,49 @@ class Emitter(gen.Emitter):
                 self.bind("c", "s.2", text, reads=("s",), fact=("snd",), note="  `-> carry")
         elif op in ("subs", "sbcs"):
             cin = "1" if op == "subs" else self.read("c")
-            a, b = self.read(t[1]), self.read(t[2])
+            a, b = self.read(t[1]), self.shifted(t, 2, text)
             expr = f"subc {a} {b} {cin}"
+            self.zero_condition_valid = False
             if t[0] == "xzr":
                 self.bind("c", f"({expr}).2", text, fact=("subs_carry", a, b, cin))
             else:
                 self.bind("s", expr, text, fact=("subs", a, b, cin))
                 self.bind(t[0], "s.1", text, reads=("s",), fact=("fst",), note=f"  `-> {t[0]}")
                 self.bind("c", "s.2", text, reads=("s",), fact=("snd",), note="  `-> carry")
+        elif op == "cmp":
+            a, b = self.read(t[0]), self.read(t[1])
+            self.bind("z", f"(cmp {a} {b}).z", text, fact=("cmp", a, b))
+            self.zero_condition_valid = True
         elif op == "csel":
-            c, a, b = self.read("c"), self.read(t[1]), self.read(t[2])
+            a, b = self.read(t[1]), self.read(t[2])
             if t[3] in ("lo", "cc"):
+                c = self.read("c")
                 self.bind(t[0], f"cselLo {c} {a} {b}", text, fact=("select", c, a, b))
             elif t[3] in ("cs", "hs"):
+                c = self.read("c")
                 self.bind(t[0], f"cselCs {c} {a} {b}", text, fact=("select", c, b, a))
+            elif t[3] == "ne":
+                if not self.zero_condition_valid:
+                    raise ValueError(f"NE condition read before cmp: {text}")
+                z = self.read("z")
+                self.bind(t[0], f"cselNe {z} {a} {b}", text, fact=("select", z, a, b))
             else:
                 raise ValueError(f"unexpected condition: {text}")
-        else:
-            raise ValueError(f"unhandled instruction: {text}")
 
-    def run(self, start):
+    def run(self, start, end=None):
         pc = start
-        while True:
+        end = len(self.ins) if end is None else end
+        while pc < end:
             op, tokens, text = self.ins[pc]
             if op == "ret":
                 self.end_pc = pc
                 return
+            if op.endswith(":") or op in ("cbnz",):
+                raise ValueError(f"control flow must be factored before emission: {text}")
             self.pc = pc
             self.step(op, tokens, text)
             pc += 1
+        self.end_pc = pc
 
 
 # Fields of the argument structures, by argument name, for the skeleton's bound hypotheses.
@@ -359,6 +596,17 @@ def loop_routines(e, ins, name, doc, args, result, cfg):
     return [rnd, main]
 
 
+def instruction_ir(templates):
+    """Normalize parsed AArch64 templates to the backend's token representation."""
+    ins = []
+    for template in templates:
+        text = re.sub(r"\{(\w+)\}", r"\1", template)
+        text = re.sub(r"\s+", " ", text.replace(", ", ",")).strip()
+        match = re.match(r"(\S+)\s*(.*)", text)
+        ins.append((match.group(1), tokenize(match.group(2)), text))
+    return ins
+
+
 def parse_inline(path, fn, args):
     """Adapt the shared Rust asm parser to the AArch64 emitter's instruction representation."""
     rust_args = args + (["inv"] if fn in ("mul", "square") else [])
@@ -367,13 +615,7 @@ def parse_inline(path, fn, args):
         allowed_options={"pure", "nomem", "nostack"},
         required_options={"pure", "nomem", "nostack"},
     )
-    ins = []
-    for template in parsed.instructions:
-        text = re.sub(r"\{(\w+)\}", r"\1", template)
-        text = re.sub(r"\s+", " ", text.replace(", ", ",")).strip()
-        match = re.match(r"(\S+)\s*(.*)", text)
-        ins.append((match.group(1), tokenize(match.group(2)), text))
-    ins.append(("ret", [], "ret"))
+    ins = instruction_ir(parsed.instructions) + [("ret", [], "ret")]
     asm_source.declaration_directions(parsed, fn)
     outputs = asm_source.output_bindings(parsed, fn)
     returned = asm_source.returned_registers(parsed, fn)
@@ -426,12 +668,354 @@ def emit_inline(fn, name, doc, args):
                     e.render(result), f"  ⟨{', '.join(result)}⟩", name, e, result)]
 
 
+def parse_word_literal(value):
+    """A Rust u64/i64 literal as its unsigned 64-bit register bitpattern."""
+    match = re.fullmatch(r"(0x[0-9a-fA-F_]+|[0-9][0-9_]*)_(?:u64|i64)", value)
+    if not match:
+        return None
+    return int(match.group(1).replace("_", ""), 0) % (1 << 64)
+
+
+def input_binding(value, args):
+    """Resolve one inversion operand expression against its configured Rust arguments."""
+    argument_types = dict(args)
+    if value in argument_types and argument_types[value] == "Nat":
+        return value, False, ("param", value)
+    indexed = re.fullmatch(r"([A-Za-z_]\w*)\[(\d+)\]", value)
+    projected = re.fullmatch(r"([A-Za-z_]\w*)\.l(\d+)", value)
+    if indexed or projected:
+        argument, index_text = (indexed or projected).groups()
+        kind = argument_types.get(argument)
+        limit = {"Limbs": 4, "WideLimbs": 9}.get(kind)
+        index = int(index_text)
+        if limit is None or index >= limit:
+            raise ValueError(f"unsupported indexed operand {value}")
+        field = f"l{index}"
+        return f"{argument}.{field}", True, ("load", argument, field)
+    literal = parse_word_literal(value)
+    if literal is not None:
+        return str(literal), False, ("const", literal)
+    raise ValueError(f"unsupported input operand expression {value}")
+
+
+def invert_arg_fields(config):
+    fields = {}
+    for name, kind in config.args:
+        if kind == "Limbs":
+            fields[name] = [f"l{index}" for index in range(4)]
+        elif kind == "WideLimbs":
+            fields[name] = [f"l{index}" for index in range(9)]
+    return fields
+
+
+def helper_signature(config):
+    grouped, index = [], 0
+    while index < len(config.args):
+        name, kind = config.args[index]
+        names = [name]
+        index += 1
+        while index < len(config.args) and config.args[index][1] == kind:
+            names.append(config.args[index][0])
+            index += 1
+        grouped.append(f"({' '.join(names)} : {kind})")
+    return f"def {config.lean_name} {' '.join(grouped)} : {config.result_type} :="
+
+
+def bind_invert_inputs(emitter, declarations, config):
+    """Bind every input/inout operand from configured arguments, locals, or typed constants."""
+    locals_ = dict(config.local_inputs)
+    directions = {declaration.name: declaration.kind for declaration in declarations}
+    if len(directions) != len(declarations):
+        raise ValueError(f"{config.rust_name}: duplicate operand declaration")
+    for declaration in declarations:
+        if declaration.kind not in ("in", "inout"):
+            continue
+        value = locals_.get(declaration.value, declaration.value)
+        expression, load, fact = input_binding(value, config.args)
+        emitter.bind(declaration.name, expression, "argument", reads=(), load=load, fact=fact)
+    return directions
+
+
+def parse_invert_helper(source, config):
+    allowed_places = ({f"value[{index}]" for index in range(4)}
+                      if config.rust_name == "reduce_once" else set())
+    parsed = asm_source.parse_helper_function(
+        source, config.rust_name, config.signature, config.regions,
+        allowed_options={"pure", "nomem", "nostack"},
+        required_options={"pure", "nomem", "nostack"},
+        inout_expression_outputs=allowed_places,
+    )
+    if len(parsed.blocks) != 1:
+        raise ValueError(f"{config.rust_name}: expected exactly one asm block")
+    block = parsed.blocks[0]
+    asm_source.validate_declarations(
+        block.declarations, INVERT_DECLARATIONS[config.rust_name], config.rust_name
+    )
+    return block
+
+
+def result_registers(declarations, config):
+    """Resolve configured Rust return fields to source asm operands, in field order."""
+    outputs = {}
+    for declaration in declarations:
+        output = declaration.output
+        direct_place = re.fullmatch(r"value\[(\d+)\]", declaration.value)
+        if output and output != "_":
+            if direct_place and config.rust_name == "reduce_once":
+                output = f"r{direct_place.group(1)}"
+            if output in outputs:
+                raise ValueError(f"{config.rust_name}: duplicate output {output}")
+            outputs[output] = declaration.name
+    missing = [field for field in config.result_fields if field not in outputs]
+    if missing:
+        raise ValueError(f"{config.rust_name}: result fields have no asm output: {missing}")
+    unused = sorted(set(outputs) - set(config.result_fields))
+    if unused:
+        raise ValueError(f"{config.rust_name}: named asm outputs not returned: {unused}")
+    return [outputs[field] for field in config.result_fields]
+
+
+def invert_result(config, registers):
+    if config.lean_name == "updateAB":
+        return f"  ⟨⟨{', '.join(registers[:4])}⟩, {registers[4]}, {registers[5]}⟩"
+    if config.lean_name == "normalizeCoefficient":
+        return f"  ⟨⟨value.l0, value.l1, value.l2, value.l3⟩, ⟨{', '.join(registers)}⟩⟩"
+    return f"  ⟨{', '.join(registers)}⟩"
+
+
+def state_structure(name, fields, doc):
+    lines = [f"/-- {doc} -/", f"structure {name} where"]
+    for field in fields:
+        field_name, field_type = (field, "Nat") if isinstance(field, str) else field
+        lines.append(f"  {field_name} : {field_type}")
+    lines.append("  deriving DecidableEq, Repr")
+    return "\n".join(lines)
+
+
+RESULT_STRUCTURES = "\n\n".join((
+    state_structure("UpdateABResult", (("value", "Limbs"), "f", "g"),
+                    "The updated GCD value and sign-corrected matrix-row coefficients."),
+    state_structure("InvertRow", ("f1", "g1"),
+                    "The second row returned by the final low-limb divsteps."),
+    state_structure("CoefficientSplit", (("low", "Limbs"), ("high", "Limbs")),
+                    "The low half and adjusted high half of the final coefficient."),
+))
+
+
+def emit_straight_invert(source, config, block=None):
+    block = parse_invert_helper(source, config) if block is None else block
+    ins = instruction_ir(block.instructions)
+    directions = {declaration.name: declaration.kind for declaration in block.declarations}
+    emitter = Emitter(ins, directions)
+    bind_invert_inputs(emitter, block.declarations, config)
+    emitter.run(0, len(ins))
+    outputs = result_registers(block.declarations, config)
+    emitter.cur_reads = set()
+    for register in outputs:
+        emitter.read(register)
+    return Routine(
+        config.doc, helper_signature(config), emitter.render(outputs),
+        invert_result(config, outputs), config.lean_name, emitter, outputs,
+        arg_fields=invert_arg_fields(config),
+    )
+
+
+def loop_boundaries(ins, config):
+    labels = [index for index, (op, _tokens, text) in enumerate(ins)
+              if op.endswith(":") and text == "2:"]
+    branches = [index for index, (op, tokens, _text) in enumerate(ins)
+                if op == "cbnz" and tokens == ["cnt", "2b"]]
+    if len(labels) != 1 or len(branches) != 1 or branches[0] <= labels[0]:
+        raise ValueError(f"{config.rust_name}: expected one `2:` / `cbnz cnt,2b` loop")
+    label, branch = labels[0], branches[0]
+    decrements = [index for index in range(label + 1, branch)
+                  if ins[index][2] == "sub cnt,cnt,#1"]
+    if len(decrements) != 1:
+        raise ValueError(f"{config.rust_name}: expected one `sub cnt,cnt,#1` in loop")
+    return label, branch
+
+
+def loop_live_sets(entries):
+    bound, live_in = set(), []
+    for entry in entries:
+        for register in sorted(entry["reads"]):
+            if register not in bound and register not in live_in:
+                live_in.append(register)
+        bound.add(entry["name"])
+    carried = [register for register in live_in if register in bound]
+    invariant = [register for register in live_in if register not in bound]
+    return carried, invariant
+
+
+def loop_state_contract(config):
+    if config.loop_count == 31:
+        return ["a3", "cnt", "b3", "fg1", "fg0"], ["bias"]
+    if config.loop_count == 47:
+        return ["a", "cnt", "b", "f0", "g0", "f1", "g1"], []
+    raise ValueError(f"{config.rust_name}: unsupported loop count {config.loop_count}")
+
+
+def render_source_ssa(emitter, result_names):
+    """Render live bindings under the wrapper skeleton's unambiguous SSA names.
+
+    This is intentionally a source-rendering view: the emitter keeps source register names in its
+    IR so liveness and skeleton facts continue to use the shared machinery.
+    """
+    live = emitter.liveness(result_names)
+    live_entries = [entry for entry, keep in zip(emitter.entries, live) if keep]
+    names = iter(gen.ssa_names(live_entries))
+    current, lines = {}, []
+    for entry, keep in zip(emitter.entries, live):
+        if keep:
+            name = next(names)
+            expression = entry["expr"]
+            for read in sorted(entry["reads"], key=len, reverse=True):
+                expression = re.sub(
+                    rf"(?<![A-Za-z0-9_']){re.escape(read)}(?![A-Za-z0-9_'])",
+                    current.get(read, read),
+                    expression,
+                )
+            lines.append((f"  let {name} := {expression}", entry.get("note") or entry["comment"]))
+            current[entry["name"]] = name
+        elif entry["load"]:
+            lines.append((
+                None,
+                f"  -- {entry['comment']}: {entry['name']} = {entry['expr']} is never read",
+            ))
+        elif entry["name"] != "c":
+            raise ValueError(
+                f"dead computation: {entry['name']} := {entry['expr']} ({entry['comment']})"
+            )
+    return lines, [current[name] for name in result_names]
+
+
+def emit_loop_invert(source, config):
+    block = parse_invert_helper(source, config)
+    ins = instruction_ir(block.instructions)
+    label, branch = loop_boundaries(ins, config)
+    directions = {declaration.name: declaration.kind for declaration in block.declarations}
+
+    flattened = Emitter(ins, directions)
+    bind_invert_inputs(flattened, block.declarations, config)
+    flattened.run(0, label)
+    for pc in range(label + 1, branch):
+        flattened.pc = pc
+        flattened.step(*ins[pc])
+    flattened.run(branch + 1, len(ins))
+    body_entries = [dict(entry) for entry in flattened.entries
+                    if entry["pc"] is not None and label < entry["pc"] < branch]
+    carried, invariant = loop_live_sets(body_entries)
+    expected_carried, expected_invariant = loop_state_contract(config)
+    if carried != expected_carried or invariant != expected_invariant:
+        raise ValueError(
+            f"{config.rust_name}: derived loop state {(carried, invariant)} differs from "
+            f"contract {(expected_carried, expected_invariant)}"
+        )
+
+    count_decl = next((declaration for declaration in block.declarations
+                       if declaration.name == "cnt"), None)
+    if count_decl is None or parse_word_literal(count_decl.value) != config.loop_count:
+        raise ValueError(f"{config.rust_name}: counter initializer must be {config.loop_count}")
+
+    state_name = config.lean_name[0].upper() + config.lean_name[1:] + "State"
+    round_name = config.lean_name + "Round"
+    round_emitter = Emitter(ins, directions)
+    for register in invariant:
+        round_emitter.bind(register, register, "invariant argument", reads=(),
+                           fact=("param", register))
+    for register in carried:
+        round_emitter.bind(register, f"acc.{register}", "loop state argument", reads=(),
+                           load=True, fact=("load", "acc", register))
+    round_emitter.entries.extend(body_entries)
+    round_emitter.cur_reads = set()
+    for register in carried:
+        round_emitter.read(register)
+    round_struct = state_structure(
+        state_name, carried, f"Registers carried by one checked iteration of `{config.lean_name}`."
+    )
+    invariant_args = "" if not invariant else " (" + " ".join(invariant) + " : Nat)"
+    round_routine = Routine(
+        f"One source loop iteration of `{config.lean_name}`. The wrapper validates and calls it "
+        f"exactly {config.loop_count} times.",
+        f"def {round_name}{invariant_args} (acc : {state_name}) : {state_name} :=",
+        round_emitter.render(carried), f"  ⟨{', '.join(carried)}⟩", round_name,
+        round_emitter, carried, struct=round_struct, arg_fields={"acc": carried},
+    )
+
+    wrapper = Emitter(ins, directions)
+    wrapper.entries = [dict(entry) for entry in flattened.entries
+                       if entry["pc"] is None or entry["pc"] < label]
+    call_fmt = round_name + (" " + " ".join("{%d}" % i for i in range(len(invariant)))
+                             if invariant else "")
+    first_state_index = len(invariant)
+    call_fmt += " ⟨" + ", ".join("{%d}" % (first_state_index + i)
+                                  for i in range(len(carried))) + "⟩"
+    epilogue_entries = [dict(entry) for entry in flattened.entries
+                        if entry["pc"] is not None and entry["pc"] > branch]
+    outputs = result_registers(block.declarations, config)
+    final_reads = set(outputs).union(*(entry["reads"] for entry in epilogue_entries))
+    for iteration in range(1, config.loop_count + 1):
+        call_args = invariant + carried
+        call_name = f"round{iteration}"
+        wrapper.entries.append(dict(
+            name=call_name, expr=call_fmt.format(*call_args), comment=f"loop iteration {iteration}",
+            note=None, reads=set(call_args), load=False, fact=("call", call_fmt, list(call_args)),
+            pc=None,
+        ))
+        next_fields = carried if iteration < config.loop_count else [
+            register for register in carried if register in final_reads
+        ]
+        for register in next_fields:
+            wrapper.entries.append(dict(
+                name=register, expr=f"{call_name}.{register}",
+                comment=f"loop iteration {iteration} output", note=None,
+                reads={call_name}, load=False, fact=("callout", call_name, register), pc=None,
+            ))
+    wrapper.entries.extend(epilogue_entries)
+    wrapper.known = {entry["name"] for entry in wrapper.entries}
+    outputs = result_registers(block.declarations, config)
+    wrapper.cur_reads = set()
+    for register in outputs:
+        wrapper.read(register)
+    # The 47-step wrapper's result fields have the same names as its initial register bindings.
+    # Render that source term in SSA form so targeted let extraction cannot choose the final field
+    # binding when the skeleton asks for the initial one. Keep the established 31-step output and
+    # its proof unchanged.
+    if config.loop_count == 47:
+        wrapper.source_ssa = True
+        lines, source_outputs = render_source_ssa(wrapper, outputs)
+    else:
+        lines, source_outputs = wrapper.render(outputs), outputs
+    main = Routine(
+        config.doc, helper_signature(config), lines,
+        invert_result(config, source_outputs), config.lean_name, wrapper, outputs,
+        arg_fields=invert_arg_fields(config),
+    )
+    return [round_routine, main]
+
+
 class SkeletonBackend(gen.SkeletonBackend):
     """AArch64 grouping and proof facts used by the shared skeleton traversal."""
 
     def prepare(self, emitter, entries):
-        entries = [dict(entry) for entry in entries]
-        names = gen.ssa_names(entries)
+        history = [()] * len(entries)
+        if getattr(emitter, "source_ssa", False):
+            full_entries = entries
+            full_names, keep, representatives, _expressions = gen.normalize_equal_lets(full_entries)
+            kept_indices = [index for index, retained in enumerate(keep) if retained]
+            entries = [dict(full_entries[index]) for index in kept_indices]
+            history = []
+            previous_full_index = -1
+            for index in kept_indices:
+                history.append([
+                    (full_entries[skipped]["name"], full_names[representatives[skipped]])
+                    for skipped in range(previous_full_index + 1, index)
+                ])
+                previous_full_index = index
+            names = [full_names[index] for index in kept_indices]
+        else:
+            entries = [dict(entry) for entry in entries]
+            names = gen.ssa_names(entries)
         i = 0
         while i < len(entries):
             kind = entries[i]["fact"][0]
@@ -450,9 +1034,69 @@ class SkeletonBackend(gen.SkeletonBackend):
             entries[i]["group_label"] = names[i + 1]
             entries[i]["dead_carry"] = dead_carry
             i += group_count
-        return gen.SkeletonPreparation(entries, names, history=[()] * len(entries))
+        return gen.SkeletonPreparation(entries, names, history=history)
 
     def fact(self, kind, ops, context):
+        def operand_lt64(operand):
+            shifted = re.fullmatch(r"\(?(lsr|asr|lsl) (\S+) ([0-9]+)\)?", str(operand))
+            if shifted:
+                function, _value, _amount = shifted.groups()
+                if function == "lsr":
+                    return f"(lt_of_le_of_lt (Nat.div_le_self _ _) {context.lt64(_value)})"
+                if function == "asr":
+                    return "asr_lt _ _"
+                return "Nat.mod_lt _ (Nat.two_pow_pos _)"
+            return context.lt64(operand)
+
+        if kind == "const":
+            (value,) = ops
+            context.eq(context.name, str(value))
+            context.lines.append(f"  have b_{context.name} : {context.name} < 2^64 := by rw [e_{context.name}]; decide")
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        simple = {
+            "add": "add", "sub": "sub", "eor": "eor", "orr": "orr",
+            "and": "bitAnd", "neg": "neg", "asr": "asr", "lslv": "lslv",
+            "lsrv": "lsrv", "extr": "extr", "ubfx": "ubfx", "sbfx": "sbfx",
+            "bfxil": "bfxil",
+        }
+        if kind in simple:
+            function = simple[kind]
+            rhs = f"{function} {' '.join(str(op) for op in ops)}"
+            context.eq(context.name, rhs)
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by "
+                f"rw [e_{context.name}]; exact {function}_lt {' '.join('_' for _ in ops)}"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "clz":
+            (a,) = ops
+            context.eq(context.name, f"clz {a}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by "
+                f"rw [e_{context.name}]; exact lt_of_le_of_lt (clz_le _) (by norm_num)"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "cmp":
+            a, b = ops
+            context.eq(context.name, f"(cmp {a} {b}).z")
+            context.lines.append(f"  have b_{context.name} : {context.name} ≤ 1 := calc")
+            context.lines.append(f"    {context.name} = (cmp {a} {b}).z := e_{context.name}")
+            context.lines.append(f"    _ ≤ 1 := cmp_z_le_one {a} {b}")
+            context.bnd[context.name] = f"b_{context.name}"
+            context.unit_bound.add(context.name)
+            return True
+        if kind == "lsr" and ops[1] != 2:
+            a, k = ops
+            context.eq(context.name, f"lsr {a} {k}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by "
+                f"rw [e_{context.name}]; exact lt_of_le_of_lt (Nat.div_le_self _ _) {context.lt64(a)}"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
         if kind in ("adds", "subs"):
             a, b, cin = ops
             i, entries = context.index, context.entries
@@ -463,12 +1107,12 @@ class SkeletonBackend(gen.SkeletonBackend):
                 val = f"({a} + {b} + {cin})"
                 lin = f"{xn} + 2^64 * {cn} = {a} + {b} + {cin}"
                 lin_proof = "Nat.mod_add_div _ _"
-                carry_proof = f"addc_carry_le_one {a} {b} {cin} {context.lt64(a)} {context.lt64(b)} {context.le1(cin)}"
+                carry_proof = f"addc_carry_le_one {a} {b} {cin} {operand_lt64(a)} {operand_lt64(b)} {context.le1(cin)}"
             else:
                 val = f"({a} + 2^64 - {b} - (1 - {cin}))"
                 lin = f"{xn} + 2^64 * {cn} + {b} + 1 = {a} + 2^64 + {cin}"
-                lin_proof = f"subc_lin {a} {b} {cin} {context.lt64(b)} {context.le1(cin)}"
-                carry_proof = f"subc_carry_le_one {a} {b} {cin} {context.lt64(a)}"
+                lin_proof = f"subc_lin {a} {b} {cin} {operand_lt64(b)} {context.le1(cin)}"
+                carry_proof = f"subc_carry_le_one {a} {b} {cin} {operand_lt64(a)}"
             context.eq(xn, f"{val} % 2^64")
             if dead_carry:
                 context.lines.append(f"  have b_{xn} : {xn} < 2^64 := by rw [e_{xn}]; "
@@ -521,7 +1165,7 @@ wrap_tactic = gen.wrap_tactic
 
 
 def gen_program():
-    parts = [HEADER, "import PastaAsm.AArch64.Semantics\n", """
+    parts = [HEADER, "import PastaAsm.Inversion\nimport PastaAsm.AArch64.Semantics\n", """
 /-!
 # The crate's inline Pasta field blocks, transcribed
 
@@ -540,11 +1184,17 @@ namespace PastaAsm.AArch64
 
 """]
     routines = all_routines()
-    # One comment column for the whole file: two spaces past the widest ordinary `let`. Lines
-    # longer than COMMENT_COLUMN_MAX are outliers (the round calls) and do not set the column.
-    column = 2 + max(len(code) for r in routines for code, _ in r.lines
-                     if code is not None and len(code) <= COMMENT_COLUMN_MAX)
-    parts.append("\n".join(r.text(column) for r in routines))
+    legacy, inversion = routines[:5], routines[5:]
+
+    def comment_column(selected):
+        return 2 + max(len(code) for routine in selected for code, _ in routine.lines
+                       if code is not None and len(code) <= COMMENT_COLUMN_MAX)
+
+    # Preserve the historical definitions byte-for-byte: inversion has its own comment column,
+    # so adding a longer binding cannot reflow any pre-existing transcription.
+    parts.append("\n".join(routine.text(comment_column(legacy)) for routine in legacy))
+    parts.extend(("\n", RESULT_STRUCTURES, "\n\n"))
+    parts.append("\n".join(routine.text(comment_column(inversion)) for routine in inversion))
     parts.append("\nend PastaAsm.AArch64\n")
     return "".join(parts)
 
@@ -593,18 +1243,56 @@ namespace PastaAsm.AArch64
     )
 
 
+def gen_invert_vectors(lines):
+    """Generate AArch64 inversion-composition checks from mathematical expectations."""
+    return gen.render_inversion_vectors(
+        lines,
+        imports="import PastaAsm.AArch64.Compositions\nimport PastaAsm.Fields\n",
+        introduction="""
+/-!
+# Mathematical reference vectors for the inversion composition
+
+GENERATED by `lean/scripts/gen.py` from the distinct canonical operands in
+`test-vectors/pasta_mul-armv8-vectors.txt`; do not edit by hand. Each example asks the
+Lean kernel to evaluate the actual AArch64 `invert` composition, including all generated
+assembly-block transcriptions used by the Rust driver.
+
+Only the operands come from the AArch64 hardware corpus. The expected values are derived
+independently by modular arithmetic, not captured from inversion hardware: zero maps to zero;
+for nonzero Montgomery residues `input * result = R^2 (mod p)`, where `R = 2^256`. Thus these
+concrete examples supplement, but do not replace, a universal inversion correctness proof.
+
+The modulus limbs and `inv` are `pallasBase` and `vestaBase` from `Fields.lean`, the crate's
+constants for its `Fp` (the Pallas base field) and `Fq` (the Vesta base field).
+-/
+
+namespace PastaAsm.AArch64
+
+""",
+        namespace="PastaAsm.AArch64",
+    )
+
+
 # Proof skeleton construction and checking are shared in gen.py.
 
 def all_routines():
     routines = []
     for fn, name, doc, args in INLINE_ROUTINES:
         routines += emit_inline(fn, name, doc, args)
+    invert_source = INVERT.read_text()
+    for config in INVERT_ROUTINES:
+        if config.loop_count is None:
+            routines.append(emit_straight_invert(invert_source, config))
+        else:
+            routines += emit_loop_invert(invert_source, config)
     return routines
 
 
 def generated_outputs():
     """Return the AArch64 generated paths and contents without writing files."""
+    lines = VECTORS.read_text().splitlines()
     return [
         (OUT_PROGRAM, gen_program()),
-        (OUT_VECTORS, gen_vectors(VECTORS.read_text().splitlines())),
+        (OUT_VECTORS, gen_vectors(lines)),
+        (OUT_INVERT_VECTORS, gen_invert_vectors(lines)),
     ]

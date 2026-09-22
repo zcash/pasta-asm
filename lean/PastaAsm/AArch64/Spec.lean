@@ -4,6 +4,7 @@ Copyright (c) 2026 the pasta-asm contributors (the transcription and the proofs)
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
 import PastaAsm.AArch64.Spec.Add
+import PastaAsm.AArch64.Spec.Invert
 import PastaAsm.AArch64.Spec.Sub
 import PastaAsm.AArch64.Spec.Mul
 import PastaAsm.AArch64.Spec.Square

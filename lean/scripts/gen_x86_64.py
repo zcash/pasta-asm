@@ -25,9 +25,11 @@ from asm_source import Declaration, GenerationError, ParsedFunction
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src/x86_64.rs"
+INVERT_SOURCE = ROOT / "src/x86_64/invert.rs"
 VECTORS = gen.VECTORS
 OUTPUT = ROOT / "lean/PastaAsm/X86_64/Transcription.lean"
 OUTPUT_VECTORS = ROOT / "lean/PastaAsm/X86_64/Vectors.lean"
+OUTPUT_INVERT_VECTORS = ROOT / "lean/PastaAsm/X86_64/InvertVectors.lean"
 PASTA_HIGH_LIMB = 1 << 62
 
 HEADER = """/-
@@ -35,6 +37,7 @@ Copyright Supranational LLC (the routines, transcribed from Semolina v0.1.4).
 Copyright (c) 2026 the pasta-asm contributors (the transcription).
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
+import PastaAsm.Inversion
 import PastaAsm.X86_64.Semantics
 
 /-!
@@ -57,8 +60,10 @@ Rust return-tuple order are parsed from the source rather than inferred here.
 
 namespace PastaAsm.X86_64
 
--- A mechanical transcription intentionally retains dead architectural results.
+-- A mechanical transcription intentionally retains dead architectural results and source
+-- operand names such as `zero`.
 set_option linter.unusedVariables false
+set_option linter.constructorNameAsVariable false
 
 """
 
@@ -148,6 +153,249 @@ ROUTINES = (
 )
 
 
+@dataclasses.dataclass(frozen=True)
+class InvertRoutineConfig:
+    rust_name: str
+    lean_name: str
+    signature: str
+    rust_regions: Tuple[Tuple[str, str], ...]
+    block_count: int = 1
+
+
+INVERT_ROUTINES = (
+    InvertRoutineConfig(
+        "divsteps_31", "divsteps31",
+        "fn divsteps_31(a: &Limbs, b: &Limbs) -> Matrix",
+        (
+            ("inputs", """
+                let mut a0 = a[0]; let mut a1 = a[1]; let mut a2 = a[2]; let a3 = a[3];
+                let mut b0 = b[0]; let b1 = b[1]; let b2 = b[2]; let b3 = b[3];
+                unsafe {
+            """),
+            ("result", """
+                ; }
+                Matrix { f0: a0 as i64, g0: a1 as i64, f1: b0 as i64, g1: a2 as i64, }
+            """),
+        ),
+    ),
+    InvertRoutineConfig(
+        "update_ab", "updateAb",
+        "fn update_ab(a: &Limbs, b: &Limbs, f: i64, g: i64) -> (Limbs, i64, i64)",
+        (
+            ("inputs", """
+                let aa = [a[0], a[1], a[2], a[3], 0];
+                let bb = [b[0], b[1], b[2], b[3], 0];
+                let [mut r0, mut r1, mut r2, mut r3, r4] = lincomb(&aa, &bb, f, g);
+                let mask: u64; let bit: u64;
+                unsafe {
+            """),
+            ("result", """
+                ; }
+                let corrected_f = ((f as u64) ^ mask).wrapping_add(bit) as i64;
+                let corrected_g = ((g as u64) ^ mask).wrapping_add(bit) as i64;
+                ([r0, r1, r2, r3], corrected_f, corrected_g)
+            """),
+        ),
+    ),
+    InvertRoutineConfig(
+        "add_words", "addWordsLimb",
+        "fn add_words<const N: usize>(mut lhs: [u64; N], rhs: &[u64; N]) -> [u64; N]",
+        (
+            ("loop", """
+                let mut carry = 0u64;
+                for i in 0..N { unsafe {
+            """),
+            ("result", "; } } lhs"),
+        ),
+    ),
+    InvertRoutineConfig(
+        "mul_signed", "mulSignedLimb",
+        "fn mul_signed<const N: usize>(value: &[u64; N], scalar: i64) -> [u64; N]",
+        (
+            ("loop", """
+                let scalar = scalar as u64;
+                let sign = (scalar as i64 >> 63) as u64;
+                let sign_bit = sign & 1;
+                let magnitude = (scalar ^ sign).wrapping_add(sign_bit);
+                let mut out = [0; N];
+                let mut negate_carry = sign_bit;
+                let mut product_carry = 0u64;
+                for i in 0..N {
+                    let limb = value[i];
+                    let next_negate_carry: u8; let low: u64; let high: u64;
+                    unsafe {
+            """),
+            ("result", """
+                ; }
+                out[i] = low;
+                negate_carry = u64::from(next_negate_carry);
+                product_carry = high;
+                }
+                out
+            """),
+        ),
+    ),
+    InvertRoutineConfig(
+        "divsteps_47", "divsteps47",
+        "fn divsteps_47(a: u64, b: u64) -> Matrix",
+        (
+            ("inputs", """
+                let mut f0 = 1u64; let mut g0 = 0u64;
+                let mut f1 = 0u64; let mut g1 = 1u64;
+                unsafe {
+            """),
+            ("result", """
+                ; }
+                Matrix { f0: f0 as i64, g0: g0 as i64, f1: f1 as i64, g1: g1 as i64, }
+            """),
+        ),
+    ),
+    InvertRoutineConfig(
+        "normalize", "normalize",
+        "fn normalize(mut value: [u64; 9], modulus: &Limbs) -> [u64; 8]",
+        (
+            ("first-inputs", """
+                let modx = [
+                    modulus[0] << 1,
+                    (modulus[1] << 1) | (modulus[0] >> 63),
+                    (modulus[2] << 1) | (modulus[1] >> 63),
+                    (modulus[3] << 1) | (modulus[2] >> 63),
+                ];
+                let [mut h0, mut h1, mut h2, mut h3] = [value[4], value[5], value[6], value[7]];
+                let mut excess = value[8];
+                let [m0, m1, m2, m3] = modx;
+                unsafe {
+            """),
+            ("second-inputs", """
+                ; }
+                let [m0, m1, m2, m3] = modx;
+                unsafe {
+            """),
+            ("result", """
+                ; }
+                value[4] = h0; value[5] = h1; value[6] = h2; value[7] = h3;
+                [value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7],]
+            """),
+        ),
+        block_count=2,
+    ),
+    InvertRoutineConfig(
+        "reduce_once", "reduceOnce",
+        "fn reduce_once(mut value: Limbs, modulus: &Limbs) -> Limbs",
+        (
+            ("inputs", """
+                let p0 = modulus[0]; let p1 = modulus[1]; let p3 = modulus[3];
+                unsafe {
+            """),
+            ("result", "; } value"),
+        ),
+    ),
+)
+
+
+
+EXPECTED_INVERT_DECLARATIONS = {
+    ("divsteps_31", 0): (
+        Declaration("a0", "inout", "a0", "a0"),
+        Declaration("a1", "inout", "a1", "a1"),
+        Declaration("a2", "inout", "a2", "a2"),
+        Declaration("a3", "inout", "a3", "_"),
+        Declaration("b0", "inout", "b0", "b0"),
+        Declaration("b1", "inout", "b1", "_"),
+        Declaration("b2", "inout", "b2", "_"),
+        Declaration("b3", "inout", "b3", "_"),
+        Declaration("t", "out", "_", "_"),
+        Declaration("rcx", "out", "_", None, fixed=True, constraint="rcx"),
+    ),
+    ("update_ab", 0): (
+        *(Declaration(f"r{i}", "inout", f"r{i}", f"r{i}") for i in range(4)),
+        Declaration("r4", "in", "r4", None),
+        Declaration("mask", "lateout", "mask", "mask"),
+        Declaration("bit", "lateout", "bit", "bit"),
+    ),
+    ("add_words", 0): (
+        Declaration("lhs", "inout", "lhs[i]", "lhs[i]"),
+        Declaration("rhs", "in", "rhs[i]", None),
+        Declaration("carry", "inout", "carry", "carry"),
+    ),
+    ("mul_signed", 0): (
+        Declaration("limb", "inout", "limb", "_"),
+        Declaration("sign", "in", "sign", None),
+        Declaration("negate_carry", "in", "negate_carry", None),
+        Declaration("next_negate_carry", "out", "next_negate_carry", "next_negate_carry",
+                    constraint="reg_byte"),
+        Declaration("magnitude", "in", "magnitude", None),
+        Declaration("product_carry", "in", "product_carry", None),
+        Declaration("rax", "out", "low", "low", fixed=True, constraint="rax"),
+        Declaration("rdx", "out", "high", "high", fixed=True, constraint="rdx"),
+    ),
+    ("divsteps_47", 0): (
+        Declaration("a", "inout", "a", "_"),
+        Declaration("b", "inout", "b", "_"),
+        Declaration("f0", "inout", "f0", "f0"),
+        Declaration("g0", "inout", "g0", "g0"),
+        Declaration("f1", "inout", "f1", "f1"),
+        Declaration("g1", "inout", "g1", "g1"),
+        Declaration("t0", "out", "_", "_"),
+        Declaration("t1", "out", "_", "_"),
+        Declaration("t2", "out", "_", "_"),
+        Declaration("count", "out", "_", "_"),
+    ),
+    ("normalize", 0): (
+        *(Declaration(f"h{i}", "inout", f"h{i}", f"h{i}") for i in range(4)),
+        Declaration("excess", "inout", "excess", "excess"),
+        *(Declaration(f"m{i}", "inout", f"m{i}", "_") for i in range(4)),
+        Declaration("mask", "out", "_", "_"),
+    ),
+    ("normalize", 1): (
+        *(Declaration(f"h{i}", "inout", f"h{i}", f"h{i}") for i in range(4)),
+        *(Declaration(f"m{i}", "inout", f"m{i}", "_") for i in range(4)),
+        Declaration("excess", "in", "excess", None),
+        Declaration("nonzero_mask", "out", "_", "_"),
+        Declaration("negative_excess", "out", "_", "_"),
+        Declaration("zero", "out", "_", "_"),
+    ),
+    ("reduce_once", 0): (
+        *(Declaration(f"r{i}", "inout", f"value[{i}]", f"value[{i}]") for i in range(4)),
+        Declaration("p0", "inout", "p0", "_"),
+        Declaration("p1", "inout", "p1", "_"),
+        Declaration("p3", "inout", "p3", "_"),
+        Declaration("zero", "out", "_", "_"),
+    ),
+}
+
+
+def parse_invert_helper(source: str, config: InvertRoutineConfig):
+    parsed = asm_source.parse_helper_function(
+        source, config.rust_name, config.signature, config.rust_regions,
+        reserved_names=RESERVED_OPERAND_NAMES,
+        fixed_registers={"rax", "rcx", "rdx"},
+        allowed_options={"pure", "nomem", "nostack"},
+        required_options={"pure", "nomem", "nostack"},
+        allowed_kinds={"in", "out", "inout", "lateout"},
+        allowed_constraints={"reg", "reg_byte"},
+        named_fixed_outputs={"rax", "rdx"},
+        inout_expression_outputs={
+            "lhs[i]", "value[0]", "value[1]", "value[2]", "value[3]",
+        },
+    )
+    if len(parsed.blocks) != config.block_count:
+        raise GenerationError(
+            f"{config.rust_name}: expected {config.block_count} asm blocks, "
+            f"found {len(parsed.blocks)}"
+        )
+    for index, block in enumerate(parsed.blocks):
+        key = (config.rust_name, index)
+        if key not in EXPECTED_INVERT_DECLARATIONS:
+            raise GenerationError(f"{config.rust_name}: missing declaration schema for block {index}")
+        asm_source.validate_declarations(
+            block.declarations,
+            EXPECTED_INVERT_DECLARATIONS[key],
+            f"{config.rust_name} block {index}",
+        )
+    return parsed
+
+
 def parse_function(source: str, config: RoutineConfig) -> ParsedFunction:
     return asm_source.parse_function(
         source,
@@ -169,17 +417,19 @@ class RegisterToken:
 class Emitter(gen.Emitter):
     """Validate x86-64 instructions and record them in the shared binding IR."""
 
-    def __init__(self, directions: Dict[str, str], pointers: Dict[str, str]):
+    def __init__(self, directions: Dict[str, str], pointers: Dict[str, str], *, inversion=False):
         super().__init__()
         self.directions = dict(directions)
         self.pointers = dict(pointers)
+        self.inversion = inversion
         self.cf_valid = False
         self.of_valid = False
+        self.zf_valid = False
         self.used_memory = False
 
     @staticmethod
     def _fact_for_input(register: str, expression: str):
-        field = re.fullmatch(r"([A-Za-z_]\w*)\.(l[0-7])", expression)
+        field = re.fullmatch(r"([A-Za-z_]\w*)\.(l[0-8])", expression)
         if field:
             return ("load", field.group(1), field.group(2))
         if expression == "inv":
@@ -188,18 +438,24 @@ class Emitter(gen.Emitter):
 
     @staticmethod
     def _reads(*operands: str) -> Set[str]:
-        return {
-            operand for operand in operands
-            if re.fullmatch(r"[A-Za-z_]\w*", operand) and not operand.isdigit()
-        }
+        reads = set()
+        for operand in operands:
+            if re.fullmatch(r"[A-Za-z_]\w*", operand) and not operand.isdigit():
+                reads.add(operand)
+            elif found := re.fullmatch(r"\(word32 ([A-Za-z_]\w*)\)", operand):
+                reads.add(found.group(1))
+        return reads
 
-    def bind_argument(self, register: str, expression: str, description: str) -> None:
+    def bind_argument(
+        self, register: str, expression: str, description: str, *, bound: Optional[str] = None,
+    ) -> None:
         self._check_declared(register)
         if register in self.known or register in self.pointers:
             raise GenerationError(f"duplicate initial binding for {register}")
+        fact = (("x86_input", expression, bound) if self.inversion and bound is not None
+                else self._fact_for_input(register, expression))
         self.bind(
-            register, expression, description, reads=(), load="." in expression,
-            fact=self._fact_for_input(register, expression),
+            register, expression, description, reads=(), load="." in expression, fact=fact,
         )
 
     def bind_pointer(self, register: str, argument: str) -> None:
@@ -219,7 +475,7 @@ class Emitter(gen.Emitter):
 
     def _check_writable(self, register: str) -> None:
         self._check_declared(register)
-        if self.directions[register] not in ("out", "inout"):
+        if self.directions[register] not in ("out", "lateout", "inout"):
             raise GenerationError(f"input-only register {register} cannot be written")
 
     @staticmethod
@@ -227,8 +483,10 @@ class Emitter(gen.Emitter):
         token = token.strip()
         if token.startswith("qword ptr") or token.startswith("["):
             raise GenerationError(f"memory write is unsupported: {token}")
-        if token == "rdx":
-            return RegisterToken("rdx")
+        if token in ("rax", "rcx", "rdx"):
+            return RegisterToken(token)
+        if token == "ecx":
+            return RegisterToken("rcx", "e")
         match = re.fullmatch(r"\{([A-Za-z_]\w*)(?::([A-Za-z_]\w*))?\}", token)
         if not match:
             raise GenerationError(f"unsupported register operand {token}")
@@ -239,12 +497,14 @@ class Emitter(gen.Emitter):
         self._check_declared(parsed.name)
         if parsed.modifier and not allow_modifier:
             raise GenerationError(f"unsupported register modifier :{parsed.modifier} in {token}")
+        if parsed.modifier not in (None, "e"):
+            raise GenerationError(f"unsupported register modifier :{parsed.modifier} in {token}")
         if parsed.name in self.pointers:
             raise GenerationError(f"pointer register {parsed.name} used outside an address")
         if parsed.name not in self.known:
             self._check_readable(parsed.name)
             raise GenerationError(f"register {parsed.name} read before being written")
-        return parsed.name
+        return f"(word32 {parsed.name})" if parsed.modifier == "e" else parsed.name
 
     def write_register(self, token: str, allow_modifier: bool = False) -> RegisterToken:
         parsed = self.parse_register(token)
@@ -274,7 +534,7 @@ class Emitter(gen.Emitter):
                 raise GenerationError(f"unsupported memory offset {displacement}")
             self.used_memory = True
             return f"{self.pointers[base]}.l{displacement // 8}"
-        return self.read_register(token)
+        return self.read_register(token, allow_modifier=self.inversion)
 
     @staticmethod
     def split_instruction(text: str) -> Tuple[str, List[str]]:
@@ -306,9 +566,81 @@ class Emitter(gen.Emitter):
         if not self.of_valid:
             raise GenerationError(f"OF read while invalid: {text}")
 
+    def require_zf(self, text: str) -> None:
+        if not self.zf_valid:
+            raise GenerationError(f"ZF read while invalid: {text}")
+
+    def invalidate_arithmetic_flags(self) -> None:
+        self.cf_valid = False
+        self.of_valid = False
+        self.zf_valid = False
+
     def emit(self, name: str, expr: str, comment: Optional[str] = None,
              *, reads=(), fact=None, note=None) -> None:
         self.bind(name, expr, comment, reads=reads, fact=fact, note=note)
+
+    def emit_pair_result(
+        self, dst: str, semantic: str, operands: Sequence[str], text: str, fact,
+    ) -> None:
+        """Bind an existing value/CF pair; unused OF and ZF remain fail-closed."""
+        reads = self._reads(*operands)
+        self.emit("s", f"{semantic} {' '.join(operands)}", text, reads=reads, fact=fact)
+        self.emit(dst, "s.1", reads=("s",), fact=("fst",), note=f"  `-> {dst}")
+        self.emit("cf", "s.2", reads=("s",), fact=("snd",), note="  `-> cf")
+        self.cf_valid = True
+        self.of_valid = self.zf_valid = False
+
+    def emit_logic(self, op: str, operands: Sequence[str], text: str) -> None:
+        self.require_count(op, operands, 2)
+        left_token = self.parse_register(operands[0])
+        right_token = self.parse_register(operands[1]) if op == "xor" else None
+        xor_self = right_token is not None and left_token == right_token
+        if xor_self:
+            self._check_declared(left_token.name)
+            old = src = "0"
+        else:
+            old = self.read_register(operands[0], allow_modifier=True)
+            src = self.read_value(operands[1])
+        parsed = self.write_register(operands[0], allow_modifier=True)
+        if parsed.modifier not in (None, "e"):
+            raise GenerationError(f"unsupported {op} register modifier :{parsed.modifier}")
+        semantic = {"and": "bitAnd", "or": "bitOr", "xor": "bitXor"}[op]
+        if parsed.modifier == "e":
+            if op != "xor":
+                raise GenerationError(f"32-bit {op} is unsupported")
+            semantic += "32"
+        self.emit(
+            parsed.name, f"{semantic} {old} {src}", text,
+            reads=self._reads(old, src), fact=("x86_logic", semantic, old, src),
+        )
+        self.emit("cf", "0", reads=(), fact=("zero_cf",), note="  `-> cf")
+        self.emit("ofl", "0", reads=(), fact=("zero_of",), note="  `-> ofl")
+        self.emit(
+            "zf", f"zeroFlag {parsed.name}", reads=(parsed.name,),
+            fact=("zero_flag", parsed.name), note="  `-> zf",
+        )
+        self.cf_valid = self.of_valid = self.zf_valid = True
+
+    def emit_cmov(self, op: str, operands: Sequence[str], text: str) -> None:
+        self.require_count(op, operands, 2)
+        if op in ("cmovz", "cmovnz"):
+            self.require_zf(text)
+            flag = "zf"
+        else:
+            self.require_cf(text)
+            flag = "cf"
+        old = self.read_register(operands[0])
+        src = self.read_value(operands[1])
+        dst = self.write_register(operands[0]).name
+        semantic = "cmovc" if op in ("cmovb", "cmovc") else op
+        zero_branch, nonzero_branch = (
+            (old, src) if op in ("cmovz", "cmovb", "cmovc") else (src, old)
+        )
+        self.emit(
+            dst, f"{semantic} {flag} {old} {src}", text,
+            reads=self._reads(flag, old, src),
+            fact=("select", flag, zero_branch, nonzero_branch),
+        )
 
     def render(self, result_names):
         """Retain every architectural result in the mechanical x86 transcription."""
@@ -374,6 +706,14 @@ class Emitter(gen.Emitter):
             self.require_of(text)
             carry = "ofl"
         dst = self.write_register(operands[0]).name
+        if self.inversion:
+            if op in ("adcx", "adox"):
+                raise GenerationError(f"{op} is unsupported in inversion helpers")
+            self.emit_pair_result(
+                dst, "addc", (dst_old, src, carry), text,
+                ("x86_adds", dst_old, src, carry),
+            )
+            return
         flag = "ofl" if op == "adox" else "cf"
         self.emit("s", f"addc {dst_old} {src} {carry}", text,
                   reads=self._reads(dst_old, src, carry), fact=("x86_adds", dst_old, src, carry))
@@ -388,13 +728,24 @@ class Emitter(gen.Emitter):
 
     def binary_sub(self, op: str, operands: Sequence[str], text: str) -> None:
         self.require_count(op, operands, 2)
-        dst_old = self.read_register(operands[0])
+        dst_old = self.read_register(operands[0], allow_modifier=self.inversion)
         src = self.read_value(operands[1])
         borrow = "0"
         if op == "sbb":
             self.require_cf(text)
             borrow = "cf"
-        dst = self.write_register(operands[0]).name
+        parsed = self.write_register(operands[0], allow_modifier=self.inversion)
+        if parsed.modifier not in (None, "e"):
+            raise GenerationError(f"unsupported {op} register modifier :{parsed.modifier}")
+        dst = parsed.name
+        if self.inversion:
+            if parsed.modifier == "e":
+                raise GenerationError("32-bit subtraction is loop control and must be factored")
+            self.emit_pair_result(
+                dst, "sbb", (dst_old, src, borrow), text,
+                ("x86_subs", dst_old, src, borrow),
+            )
+            return
         self.emit("d", f"sbb {dst_old} {src} {borrow}", text,
                   reads=self._reads(dst_old, src, borrow), fact=("x86_subs", dst_old, src, borrow))
         self.emit(dst, "d.1", reads=("d",), fact=("fst",), note=f"  `-> {dst}")
@@ -408,8 +759,14 @@ class Emitter(gen.Emitter):
             if op in ("mov", "movabs"):
                 self.require_count(op, operands, 2)
                 src = self.read_value(operands[1])
-                dst = self.write_register(operands[0]).name
-                self.emit(dst, src, text, reads=self._reads(src), fact=("mov", src))
+                parsed = self.write_register(operands[0], allow_modifier=self.inversion)
+                if parsed.modifier not in (None, "e"):
+                    raise GenerationError(f"unsupported mov register modifier :{parsed.modifier}")
+                expression = f"word32 {src}" if parsed.modifier == "e" else src
+                self.emit(
+                    parsed.name, expression, text, reads=self._reads(src),
+                    fact=("word32" if parsed.modifier == "e" else "mov", src),
+                )
             elif op == "mulx":
                 self.require_count(op, operands, 3)
                 rdx = self.read_register("rdx")
@@ -431,39 +788,170 @@ class Emitter(gen.Emitter):
                           reads=self._reads(old, src), fact=("mul", old, src))
                 self.cf_valid = False
                 self.of_valid = False
-            elif op in ("shl", "shr"):
+            elif op in ("shl", "shr", "sar"):
                 self.require_count(op, operands, 2)
                 old = self.read_register(operands[0])
                 amount = self.immediate(operands[1])
                 if not 1 <= amount < 64:
                     raise GenerationError("only unmasked nonzero 64-bit shift counts are supported")
                 dst = self.write_register(operands[0]).name
-                operation = "lsl" if op == "shl" else "lsr"
-                self.emit(dst, f"{operation} {old} {amount}", text,
-                          reads=(old,), fact=(operation, old, amount))
-                self.cf_valid = False
-                self.of_valid = False
+                if self.inversion:
+                    semantic = {"shl": "lsl", "shr": "lsr", "sar": "sar"}[op]
+                    fact = (semantic, old, amount) if op != "sar" else ("x86_sar", old, amount)
+                    self.emit(dst, f"{semantic} {old} {amount}", text, reads=(old,), fact=fact)
+                    self.invalidate_arithmetic_flags()
+                else:
+                    if op == "sar":
+                        raise GenerationError("sar is supported only in inversion helpers")
+                    operation = "lsl" if op == "shl" else "lsr"
+                    self.emit(dst, f"{operation} {old} {amount}", text,
+                              reads=(old,), fact=(operation, old, amount))
+                    self.cf_valid = False
+                    self.of_valid = False
             elif op in ("add", "adc", "adcx", "adox"):
                 self.binary_add(op, operands, text)
             elif op in ("sub", "sbb"):
                 self.binary_sub(op, operands, text)
+            elif op == "bsr":
+                if not self.inversion:
+                    raise GenerationError("bsr is supported only in inversion helpers")
+                self.require_count(op, operands, 2)
+                src = self.read_value(operands[1])
+                dst = self.write_register(operands[0]).name
+                self.emit(
+                    dst, f"(bsr {src}).getD 0", text,
+                    reads=self._reads(src), fact=("x86_bsr", src),
+                )
+                self.emit(
+                    "zf", f"zeroFlag {src}", reads=self._reads(src),
+                    fact=("zero_flag", src), note="  `-> zf",
+                )
+                self.zf_valid = True
+                self.cf_valid = self.of_valid = False
+            elif op in ("shld", "shrd"):
+                if not self.inversion:
+                    raise GenerationError(f"{op} is supported only in inversion helpers")
+                self.require_count(op, operands, 3)
+                old = self.read_register(operands[0])
+                src = self.read_register(operands[1])
+                count_token = operands[2]
+                if count_token == "cl":
+                    count = self.read_register("rcx")
+                else:
+                    count = str(self.immediate(count_token))
+                dst = self.write_register(operands[0]).name
+                self.emit(
+                    dst, f"{op} {old} {src} {count}", text,
+                    reads=self._reads(old, src, count),
+                    fact=("x86_double_shift", op, old, src, count),
+                )
+                self.invalidate_arithmetic_flags()
+            elif op == "mul":
+                if not self.inversion:
+                    raise GenerationError("one-operand mul is supported only in inversion helpers")
+                self.require_count(op, operands, 1)
+                rax = self.read_register("rax")
+                src = self.read_value(operands[0])
+                self.write_register("rax")
+                self.write_register("rdx")
+                self.emit(
+                    "rdx", f"umulh {rax} {src}", text,
+                    reads=self._reads(rax, src), fact=("umulh", rax, src),
+                )
+                self.emit(
+                    "rax", f"mulLo {rax} {src}", reads=self._reads(rax, src),
+                    fact=("mul", rax, src), note="  `-> rax",
+                )
+                self.invalidate_arithmetic_flags()
             elif op == "neg":
                 self.require_count(op, operands, 1)
                 old = self.read_register(operands[0])
                 dst = self.write_register(operands[0]).name
-                self.emit("n", f"neg {old}", text, reads=(old,), fact=("x86_neg", old))
-                self.emit(dst, "n.1", reads=("n",), fact=("fst",), note=f"  `-> {dst}")
-                self.emit("cf", "n.2", reads=("n",), fact=("snd",), note="  `-> cf")
-                self.cf_valid = True
-                self.of_valid = False
-            elif op == "cmovnc":
+                if self.inversion:
+                    self.emit_pair_result(dst, "neg", (old,), text, ("x86_neg", old))
+                else:
+                    self.emit("n", f"neg {old}", text, reads=(old,), fact=("x86_neg", old))
+                    self.emit(dst, "n.1", reads=("n",), fact=("fst",), note=f"  `-> {dst}")
+                    self.emit("cf", "n.2", reads=("n",), fact=("snd",), note="  `-> cf")
+                    self.cf_valid = True
+                    self.of_valid = False
+            elif op in ("cmp", "test"):
+                if not self.inversion:
+                    raise GenerationError(f"{op} is supported only in inversion helpers")
                 self.require_count(op, operands, 2)
-                self.require_cf(text)
+                left = self.read_value(operands[0])
+                right = self.read_value(operands[1])
+                if op == "cmp":
+                    self.emit(
+                        "cf", f"(sbb {left} {right} 0).2", text,
+                        reads=self._reads(left, right), fact=("x86_cmp", left, right),
+                    )
+                    self.cf_valid = True
+                    self.of_valid = self.zf_valid = False
+                else:
+                    self.emit("test", f"bitAnd {left} {right}", text,
+                              reads=self._reads(left, right), fact=("x86_logic", "bitAnd", left, right))
+                    self.emit("cf", "0", reads=(), fact=("mov", "0"), note="  `-> cf")
+                    self.emit("ofl", "0", reads=(), fact=("mov", "0"), note="  `-> ofl")
+                    self.emit("zf", "zeroFlag test", reads=("test",),
+                              fact=("zero_flag", "test"), note="  `-> zf")
+                    self.cf_valid = self.of_valid = self.zf_valid = True
+            elif op == "not":
+                if not self.inversion:
+                    raise GenerationError("not is supported only in inversion helpers")
+                self.require_count(op, operands, 1)
                 old = self.read_register(operands[0])
-                src = self.read_value(operands[1])
                 dst = self.write_register(operands[0]).name
-                self.emit(dst, f"cmovnc cf {old} {src}", text,
-                          reads=self._reads("cf", old, src), fact=("select", "cf", src, old))
+                self.emit(dst, f"bitNot {old}", text, reads=(old,), fact=("x86_not", old))
+            elif op == "lea":
+                if not self.inversion:
+                    raise GenerationError("lea is supported only in inversion helpers")
+                self.require_count(op, operands, 2)
+                address = re.fullmatch(r"\[\s*([^+\]]+)\s*\+\s*([0-9]+)\s*\]", operands[1])
+                if not address:
+                    raise GenerationError(f"unsupported lea address {operands[1]}")
+                src = self.read_register(address.group(1).strip())
+                offset = int(address.group(2))
+                dst = self.write_register(operands[0]).name
+                self.emit(dst, f"lea {src} {offset}", text, reads=(src,), fact=("x86_lea", src, offset))
+            elif op == "bt":
+                if not self.inversion:
+                    raise GenerationError("bt is supported only in inversion helpers")
+                self.require_count(op, operands, 2)
+                base = self.read_value(operands[0])
+                index = self.read_value(operands[1])
+                self.emit("cf", f"bt {base} {index}", text,
+                          reads=self._reads(base, index), fact=("bit", base, index))
+                self.cf_valid = True
+                self.of_valid = self.zf_valid = False
+            elif op == "setc":
+                if not self.inversion:
+                    raise GenerationError("setc is supported only in inversion helpers")
+                self.require_count(op, operands, 1)
+                self.require_cf(text)
+                dst = self.write_register(operands[0]).name
+                self.emit(dst, "setc cf", text, reads=("cf",), fact=("x86_setc", "cf"))
+            elif op in ("cmovz", "cmovnz", "cmovb", "cmovc"):
+                if not self.inversion:
+                    raise GenerationError(f"{op} is supported only in inversion helpers")
+                self.emit_cmov(op, operands, text)
+            elif op == "cmovnc":
+                if self.inversion:
+                    self.emit_cmov(op, operands, text)
+                else:
+                    self.require_count(op, operands, 2)
+                    self.require_cf(text)
+                    old = self.read_register(operands[0])
+                    src = self.read_value(operands[1])
+                    dst = self.write_register(operands[0]).name
+                    self.emit(dst, f"cmovnc cf {old} {src}", text,
+                              reads=self._reads("cf", old, src), fact=("select", "cf", src, old))
+            elif op in ("and", "or"):
+                if not self.inversion:
+                    raise GenerationError(f"unsupported instruction {op}: {text}")
+                self.emit_logic(op, operands, text)
+            elif op == "xor" and self.inversion:
+                self.emit_logic(op, operands, text)
             elif op == "xor":
                 self.require_count(op, operands, 2)
                 left = self.parse_register(operands[0])
@@ -527,7 +1015,9 @@ class SkeletonBackend(gen.SkeletonBackend):
         )
         kept_indices = [index for index, retained in enumerate(keep) if retained]
         entries = [dict(full_entries[index]) for index in kept_indices]
-        triple_facts = {"x86_adds", "x86_subs", "x86_mulx", "x86_neg", "x86_xor"}
+        triple_facts = {
+            "x86_adds", "x86_subs", "x86_mulx", "x86_neg", "x86_xor", "x86_logic",
+        }
         groups = {}
         for index, full_entry in enumerate(full_entries):
             if full_entry["fact"][0] in triple_facts:
@@ -580,7 +1070,9 @@ class SkeletonBackend(gen.SkeletonBackend):
         # zero). Mirror that common-subexpression pass using canonical SSA definitions for reads.
         kept_indices = [index for index, retained in enumerate(keep) if retained]
         entries = [dict(full_entries[index]) for index in kept_indices]
-        triple_facts = {"x86_adds", "x86_subs", "x86_mulx", "x86_neg", "x86_xor"}
+        triple_facts = {
+            "x86_adds", "x86_subs", "x86_mulx", "x86_neg", "x86_xor", "x86_logic",
+        }
         groups = {}
         group_for_index = {}
         for index, full_entry in enumerate(full_entries):
@@ -597,16 +1089,28 @@ class SkeletonBackend(gen.SkeletonBackend):
                 for member_index in member_indices:
                     group_for_index[member_index] = group
         history = []
+        current_proof_names = {}
         previous_full_index = -1
         for entry, index in zip(entries, kept_indices):
             entry["proof_name"] = full_names[index]
-            history.append([
-                (
-                    full_entries[full_index]["name"],
-                    full_names[representatives[full_index]],
-                )
-                for full_index in range(previous_full_index + 1, index)
-            ])
+            skipped_history = []
+            for full_index in range(previous_full_index + 1, index):
+                register = full_entries[full_index]["name"]
+                proof_name = full_names[representatives[full_index]]
+                skipped_history.append((register, proof_name))
+                current_proof_names[register] = proof_name
+            # A 32-bit source operand is represented in the fact IR as `(word32 r)`. The shared
+            # traversal renames whole operands, so record the corresponding composite alias when
+            # `r` was rebound by a helper callout before a following 32-bit instruction.
+            if entry["fact"][0] == "word32":
+                wrapped = re.fullmatch(r"\(word32 ([A-Za-z_]\w*)\)", entry["fact"][1])
+                if wrapped and wrapped.group(1) in current_proof_names:
+                    register = wrapped.group(1)
+                    skipped_history.append((
+                        entry["fact"][1], f"(word32 {current_proof_names[register]})",
+                    ))
+            history.append(skipped_history)
+            current_proof_names[entry["name"]] = full_names[index]
             previous_full_index = index
             if group := group_for_index.get(index):
                 entry["group"] = group
@@ -622,15 +1126,157 @@ class SkeletonBackend(gen.SkeletonBackend):
             full_names[index] for index in kept_indices
             if normalized_expressions[index] == "0"
         }
-        # Clearing each extracted helper value repeatedly rechecks the remaining dependent `hr`
-        # tail. Keep its local definitions transparent; generated facts still record every step.
+        # Historical helper skeletons retain transparent values. The four divsteps helpers opt in
+        # narrowly to per-extraction opacity because their handwritten conclusions otherwise keep
+        # the full dependent loop trace alive and exhaust elaboration memory.
         return gen.SkeletonPreparation(
-            entries, names, zero_names=zero_names, history=history, clear_values=False,
+            entries, names, zero_names=zero_names, history=history,
+            clear_values=getattr(emitter, "divsteps_clear_values", False),
         )
 
     def fact(self, kind, ops, context):
         group = context.group_entries
         group_names, group_live = context.group_names, context.group_live
+        if kind == "x86_input":
+            expression, bound = ops
+            context.eq(context.name, expression)
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by "
+                f"rw [e_{context.name}]; exact {bound}"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "word32":
+            (operand,) = ops
+            context.eq(context.name, f"word32 {operand}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by rw [e_{context.name}]; "
+                "exact Nat.lt_trans (word32_lt _) (by decide)"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "zero_flag":
+            (operand,) = ops
+            context.eq(context.name, f"zeroFlag {operand}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} ≤ 1 := by rw [e_{context.name}]; "
+                "exact zeroFlag_le_one _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            context.unit_bound.add(context.name)
+            return True
+        if kind == "x86_logic":
+            semantic, a, b = ops
+            value_name = group_names[0]
+            if group_live[0]:
+                context.eq(value_name, f"{semantic} {a} {b}")
+                bound_lemma = {
+                    "bitAnd": "bitAnd_lt", "bitOr": "bitOr_lt",
+                    "bitXor": "bitXor_lt", "bitXor32": "bitXor32_lt",
+                }[semantic]
+                context.lines.append(
+                    f"  have b_{value_name} : {value_name} < 2^64 := by rw [e_{value_name}]; "
+                    f"exact {bound_lemma} _ _"
+                )
+                context.bnd[value_name] = f"b_{value_name}"
+                context.ren[group[0][0]["name"]] = value_name
+            for index in range(1, min(3, len(group_names))):
+                if group_live[index]:
+                    flag_name = group_names[index]
+                    context.eq(flag_name, "0")
+                    context.lines.append(
+                        f"  have b_{flag_name} : {flag_name} ≤ 1 := by rw [e_{flag_name}]; decide"
+                    )
+                    context.bnd[flag_name] = f"b_{flag_name}"
+                    context.unit_bound.add(flag_name)
+                    context.ren[group[index][0]["name"]] = flag_name
+            if len(group_names) > 3 and group_live[3]:
+                zf_name = group_names[3]
+                context.eq(zf_name, f"zeroFlag {value_name}")
+                context.lines.append(
+                    f"  have b_{zf_name} : {zf_name} ≤ 1 := by rw [e_{zf_name}]; "
+                    "exact zeroFlag_le_one _"
+                )
+                context.bnd[zf_name] = f"b_{zf_name}"
+                context.unit_bound.add(zf_name)
+                context.ren[group[3][0]["name"]] = zf_name
+            context.consumed = sum(group_live)
+            return True
+        if kind == "x86_cmp":
+            a, b = ops
+            context.eq(context.name, f"(sbb {a} {b} 0).2")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} ≤ 1 := by rw [e_{context.name}]; "
+                f"exact sbb_borrow_le_one {a} {b} 0"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            context.unit_bound.add(context.name)
+            return True
+        if kind == "x86_sar":
+            operand, count = ops
+            context.eq(context.name, f"sar {operand} {count}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by rw [e_{context.name}]; "
+                "exact sar_lt _ _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "x86_double_shift":
+            semantic, dst, src, count = ops
+            context.eq(context.name, f"{semantic} {dst} {src} {count}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by rw [e_{context.name}]; "
+                f"exact {semantic}_lt _ _ _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "x86_bsr":
+            (operand,) = ops
+            context.eq(context.name, f"(bsr {operand}).getD 0")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by rw [e_{context.name}]; "
+                "exact bsr_getD_lt _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "x86_not":
+            (operand,) = ops
+            context.eq(context.name, f"bitNot {operand}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by rw [e_{context.name}]; "
+                "exact bitNot_lt _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "x86_lea":
+            operand, offset = ops
+            context.eq(context.name, f"lea {operand} {offset}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} < 2^64 := by rw [e_{context.name}]; "
+                "exact word_lt _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            return True
+        if kind == "bit":
+            base, index = ops
+            context.eq(context.name, f"bt {base} {index}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} ≤ 1 := by rw [e_{context.name}]; "
+                "exact bt_le_one _ _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            context.unit_bound.add(context.name)
+            return True
+        if kind == "x86_setc":
+            (flag,) = ops
+            context.eq(context.name, f"setc {flag}")
+            context.lines.append(
+                f"  have b_{context.name} : {context.name} ≤ 1 := by rw [e_{context.name}]; "
+                "exact setc_le_one _"
+            )
+            context.bnd[context.name] = f"b_{context.name}"
+            context.unit_bound.add(context.name)
+            return True
         if kind == "x86_mulx":
             a, b = ops
             high, low = group_names[1:3]
@@ -1065,6 +1711,373 @@ def factor_mul_rounds(routine: Routine):
     return [round_routine, main]
 
 
+
+@dataclasses.dataclass(frozen=True)
+class InvertBlockSpec:
+    name: str
+    signature: str
+    args: Tuple[Tuple[str, str], ...]
+    bindings: Dict[str, str]
+    results: Tuple[str, ...]
+    result: str
+    doc: str
+    struct: Optional[str] = None
+    arg_fields: Optional[Dict[str, Sequence[str]]] = None
+
+
+def emit_invert_block(block, instructions: Sequence[str], spec: InvertBlockSpec) -> Routine:
+    directions = asm_source.declaration_directions(block, spec.name)
+    emitter = Emitter(directions, {}, inversion=True)
+    emitter.helper_proof_mode = True
+    emitter.divsteps_clear_values = spec.name.startswith("divsteps")
+    argument_types = dict(spec.args)
+    for declaration in block.declarations:
+        if declaration.fixed:
+            continue
+        if declaration.kind in ("in", "inout"):
+            if declaration.name not in spec.bindings:
+                raise GenerationError(f"{spec.name}: missing input binding for {declaration.name}")
+            expression = spec.bindings[declaration.name]
+            field = re.fullmatch(r"([A-Za-z_]\w*)\.([A-Za-z_]\w*)", expression)
+            if field:
+                argument, field_name = field.groups()
+                if argument not in argument_types:
+                    raise GenerationError(f"{spec.name}: bound input names unknown argument {argument}")
+                effective_fields = dict(gen.ARG_FIELDS)
+                effective_fields.update(spec.arg_fields or {})
+                fields = effective_fields.get(argument)
+                if fields is None and argument_types[argument] == "Limbs":
+                    fields = gen.LIMB_FIELDS
+                if fields is None or field_name not in fields:
+                    raise GenerationError(f"{spec.name}: no bound projection for {expression}")
+                hypothesis = gen.BOUND_HYPS.get(argument, f"h{argument}")
+                bound = f"{hypothesis}.{gen.proj(argument, field_name, {argument: fields})}"
+            else:
+                bound = gen.BOUND_HYPS.get(expression, f"h{expression}")
+            emitter.bind_argument(
+                declaration.name, expression, f"input {declaration.value}", bound=bound,
+            )
+        elif declaration.kind not in ("out", "lateout"):
+            raise GenerationError(f"{spec.name}: unsupported direction {declaration.kind}")
+    fixed_inputs = [declaration for declaration in block.declarations if declaration.fixed
+                    and declaration.kind in ("in", "inout")]
+    if fixed_inputs:
+        raise GenerationError(f"{spec.name}: fixed input operands are unsupported")
+    for pc, instruction in enumerate(instructions):
+        emitter.pc = pc
+        emitter.emit_instruction(instruction)
+    for register in spec.results:
+        if register not in emitter.known:
+            raise GenerationError(f"{spec.name}: result register {register} was never written")
+    arg_fields = dict(spec.arg_fields or {})
+    return Routine(
+        spec.doc, spec.signature, emitter.render(spec.results), spec.result,
+        spec.name, emitter, list(spec.results), struct=spec.struct,
+        arg_fields=arg_fields,
+    )
+
+
+
+INVERT_STRUCTS = """/-- Outputs of the shift-and-absolute-value inversion helper block. -/
+structure UpdateAbResult where
+  value : Limbs
+  f : Nat
+  g : Nat
+  deriving DecidableEq, Repr
+
+/-- Carry state produced by one generic `add_words` assembly iteration. -/
+structure AddWordsLimbResult where
+  value : Nat
+  carry : Nat
+  deriving DecidableEq, Repr
+
+/-- Product and carry state produced by one generic `mul_signed` assembly iteration. -/
+structure MulSignedLimbResult where
+  low : Nat
+  high : Nat
+  negateCarry : Nat
+  deriving DecidableEq, Repr
+
+/-- High-half state after the first normalization assembly block. -/
+structure NormalizeNegativeResult where
+  h0 : Nat
+  h1 : Nat
+  h2 : Nat
+  h3 : Nat
+  excess : Nat
+  deriving DecidableEq, Repr
+"""
+
+
+def _config(name: str) -> InvertRoutineConfig:
+    return next(config for config in INVERT_ROUTINES if config.rust_name == name)
+
+
+def emit_simple_invert_routines(source: str) -> List[Routine]:
+    routines: List[Routine] = []
+
+    parsed = parse_invert_helper(source, _config("update_ab"))
+    routines.append(emit_invert_block(parsed.blocks[0], parsed.blocks[0].instructions, InvertBlockSpec(
+        "updateAbShift",
+        "def updateAbShift (value : PastaAsm.WideLimbs) (f g : Nat) : UpdateAbResult :=",
+        (("value", "PastaAsm.WideLimbs"), ("f", "Nat"), ("g", "Nat")),
+        {**{f"r{i}": f"value.l{i}" for i in range(5)}, "mask": "0", "bit": "0"},
+        ("r0", "r1", "r2", "r3", "mask", "bit"),
+        "  ⟨⟨r0, r1, r2, r3⟩, word ((word f ^^^ mask) + bit), "
+        "word ((word g ^^^ mask) + bit)⟩",
+        "The `update_ab` assembly block: shift a five-word linear combination by 31, "
+        "take its absolute value, and apply the sign correction to the row coefficients.",
+        struct=INVERT_STRUCTS,
+        arg_fields={"value": [f"l{i}" for i in range(9)]},
+    )))
+
+    parsed = parse_invert_helper(source, _config("add_words"))
+    routines.append(emit_invert_block(parsed.blocks[0], parsed.blocks[0].instructions, InvertBlockSpec(
+        "addWordsLimb",
+        "def addWordsLimb (lhs rhs carry : Nat) : AddWordsLimbResult :=",
+        (("lhs", "Nat"), ("rhs", "Nat"), ("carry", "Nat")),
+        {"lhs": "lhs", "rhs": "rhs", "carry": "carry"},
+        ("lhs", "carry"), "  ⟨lhs, carry⟩",
+        "One iteration of the generic `add_words` assembly block. The Rust loop applies it "
+        "once per public limb and discards carry above the final limb.",
+    )))
+
+    parsed = parse_invert_helper(source, _config("mul_signed"))
+    routines.append(emit_invert_block(parsed.blocks[0], parsed.blocks[0].instructions, InvertBlockSpec(
+        "mulSignedLimb",
+        "def mulSignedLimb (limb sign negateCarry magnitude productCarry : Nat) : "
+        "MulSignedLimbResult :=",
+        (("limb", "Nat"), ("sign", "Nat"), ("negateCarry", "Nat"),
+         ("magnitude", "Nat"), ("productCarry", "Nat")),
+        {"limb": "limb", "sign": "sign", "negate_carry": "negateCarry",
+         "magnitude": "magnitude", "product_carry": "productCarry"},
+        ("rax", "rdx", "next_negate_carry"), "  ⟨rax, rdx, next_negate_carry⟩",
+        "One iteration of the generic `mul_signed` assembly block, including conditional "
+        "two's-complement negation and one unsigned multiply-with-carry step.",
+    )))
+
+    parsed = parse_invert_helper(source, _config("normalize"))
+    routines.append(emit_invert_block(parsed.blocks[0], parsed.blocks[0].instructions, InvertBlockSpec(
+        "normalizeNegative",
+        "def normalizeNegative (value : PastaAsm.WideLimbs) (modulus2 : Limbs) : "
+        "NormalizeNegativeResult :=",
+        (("value", "PastaAsm.WideLimbs"), ("modulus2", "Limbs")),
+        {**{f"h{i}": f"value.l{i + 4}" for i in range(4)}, "excess": "value.l8",
+         **{f"m{i}": f"modulus2.l{i}" for i in range(4)}},
+        ("h0", "h1", "h2", "h3", "excess"), "  ⟨h0, h1, h2, h3, excess⟩",
+        "The first `normalize` assembly block: conditionally add the aligned doubled modulus "
+        "when the coefficient is negative.",
+        arg_fields={"value": [f"l{i}" for i in range(9)]},
+    )))
+    routines.append(emit_invert_block(parsed.blocks[1], parsed.blocks[1].instructions, InvertBlockSpec(
+        "normalizeExcess",
+        "def normalizeExcess (high modulus2 : Limbs) (excess : Nat) : Limbs :=",
+        (("high", "Limbs"), ("modulus2", "Limbs"), ("excess", "Nat")),
+        {**{f"h{i}": f"high.l{i}" for i in range(4)},
+         **{f"m{i}": f"modulus2.l{i}" for i in range(4)}, "excess": "excess"},
+        ("h0", "h1", "h2", "h3"), "  ⟨h0, h1, h2, h3⟩",
+        "The second `normalize` assembly block: add or subtract one aligned doubled modulus "
+        "according to the remaining signed excess word.",
+    )))
+
+    parsed = parse_invert_helper(source, _config("reduce_once"))
+    routines.append(emit_invert_block(parsed.blocks[0], parsed.blocks[0].instructions, InvertBlockSpec(
+        "reduceOnce",
+        "def reduceOnce (value modulus : Limbs) : Limbs :=",
+        (("value", "Limbs"), ("modulus", "Limbs")),
+        {**{f"r{i}": f"value.l{i}" for i in range(4)},
+         "p0": "modulus.l0", "p1": "modulus.l1", "p3": "modulus.l3"},
+        ("r0", "r1", "r2", "r3"), "  ⟨r0, r1, r2, r3⟩",
+        "The `reduce_once` assembly block: subtract one Pasta modulus and conditionally add it back.",
+    )))
+    return routines
+
+
+
+DIVSTEPS_STRUCTS = """/-- Apply a mechanically transcribed fixed-loop body a public number of times. -/
+def iterate {α : Type} (step : α → α) : Nat → α → α
+  | 0, s => s
+  | n + 1, s => iterate step n (step s)
+
+/-- Live register state of one factored 31-divstep inner-loop iteration. -/
+structure Divsteps31State where
+  a0 : Nat
+  a1 : Nat
+  a2 : Nat
+  a3 : Nat
+  b0 : Nat
+  b1 : Nat
+  b2 : Nat
+  b3 : Nat
+  t : Nat
+  deriving DecidableEq, Repr
+
+/-- Live register state of one factored final divstep iteration. -/
+structure Divsteps47State where
+  a : Nat
+  b : Nat
+  f0 : Nat
+  g0 : Nat
+  f1 : Nat
+  g1 : Nat
+  t0 : Nat
+  t1 : Nat
+  t2 : Nat
+  deriving DecidableEq, Repr
+"""
+
+
+def _validate_fixed_loop(instructions, *, count_init, decrement, counter_tokens,
+                         label_index, body_range, decrement_index, branch_index):
+    first, last = body_range
+    expected = {
+        label_index: "2:",
+        decrement_index: decrement,
+        branch_index: "jnz 2b",
+    }
+    if instructions[0 if label_index == 1 else label_index - 1] != count_init:
+        raise GenerationError(f"fixed loop count initializer must be `{count_init}`")
+    for index, instruction in expected.items():
+        if instructions[index] != instruction:
+            raise GenerationError(
+                f"fixed loop control at instruction {index} must be `{instruction}`"
+            )
+    labels = [(index, instruction) for index, instruction in enumerate(instructions)
+              if instruction.endswith(":")]
+    branches = [(index, instruction) for index, instruction in enumerate(instructions)
+                if instruction.startswith("j")]
+    if labels != [(label_index, "2:")] or branches != [(branch_index, "jnz 2b")]:
+        raise GenerationError("fixed loop must have exactly one `2:` label and one `jnz 2b`")
+    if not (label_index < first <= last < decrement_index
+            and branch_index == decrement_index + 1):
+        raise GenerationError("fixed loop decrement must immediately precede its backedge")
+    def uses_counter(instruction):
+        return any(
+            re.search(rf"\{{{re.escape(token)}(?::[A-Za-z_]\w*)?\}}", instruction)
+            or re.search(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])", instruction)
+            for token in counter_tokens
+        )
+
+    counter_uses = [
+        (index, instruction) for index, instruction in enumerate(instructions)
+        if uses_counter(instruction)
+    ]
+    if counter_uses != [(label_index - 1, count_init), (decrement_index, decrement)]:
+        raise GenerationError("fixed loop counter may appear only in its initializer and decrement")
+    # `sub` writes ZF and the immediately following `jnz` is the only branch, so its condition is
+    # mechanically tied to this public counter decrement rather than any data-dependent flag.
+    return instructions[first:last + 1]
+
+
+def emit_divsteps31_routines(source: str) -> List[Routine]:
+    parsed = parse_invert_helper(source, _config("divsteps_31"))
+    block = parsed.blocks[0]
+    instructions = block.instructions
+    body = _validate_fixed_loop(
+        instructions, count_init="mov ecx, 31", decrement="sub ecx, 1",
+        counter_tokens=("ecx",), label_index=36, body_range=(37, 56),
+        decrement_index=57, branch_index=58,
+    )
+    fields = ("a0", "a1", "a2", "a3", "b0", "b1", "b2", "b3", "t")
+    round_routine = emit_invert_block(block, body, InvertBlockSpec(
+        "divsteps31Round", "def divsteps31Round (s : Divsteps31State) : Divsteps31State :=",
+        (("s", "Divsteps31State"),), {field: f"s.{field}" for field in fields}, fields,
+        "  ⟨a0, a1, a2, a3, b0, b1, b2, b3, t⟩",
+        "One mechanically factored iteration of the fixed 31-step inner loop. The factorer "
+        "checks the source count, label, decrement, backedge, and exact body slice.",
+        struct=DIVSTEPS_STRUCTS, arg_fields={"s": list(fields)},
+    ))
+
+    prefix = list(instructions[:36])
+    suffix = list(instructions[59:])
+    main = emit_invert_block(block, prefix, InvertBlockSpec(
+        "divsteps31", "def divsteps31 (a b : Limbs) : InvertMatrix :=",
+        (("a", "Limbs"), ("b", "Limbs")),
+        {**{f"a{i}": f"a.l{i}" for i in range(4)}, **{f"b{i}": f"b.l{i}" for i in range(4)}},
+        (), "", "The complete 31-iteration approximation helper.",
+    ))
+    emitter = main.emitter
+    call_args = list(fields)
+    emitter.bind(
+        "loop", "iterate divsteps31Round 31 ⟨" + ", ".join(call_args) + "⟩",
+        "factored fixed 31-iteration loop", reads=set(call_args),
+        fact=("call", "iterate divsteps31Round 31 ⟨" + ", ".join("{%d}" % i for i in range(len(call_args))) + "⟩", call_args),
+    )
+    for field in fields:
+        emitter.bind(field, f"loop.{field}", "fixed loop output", reads={"loop"},
+                     fact=("callout", "loop", field))
+    for pc, instruction in enumerate(suffix, start=59):
+        emitter.pc = pc
+        emitter.emit_instruction(instruction)
+    results = ["a0", "a1", "b0", "a2"]
+    main.lines = emitter.render(results)
+    main.result_names = results
+    main.result = "  ⟨a0, a1, b0, a2⟩"
+    return [round_routine, main]
+
+
+def emit_divsteps47_routines(source: str) -> List[Routine]:
+    parsed = parse_invert_helper(source, _config("divsteps_47"))
+    block = parsed.blocks[0]
+    instructions = block.instructions
+    body = _validate_fixed_loop(
+        instructions, count_init="mov {count:e}, 47", decrement="sub {count:e}, 1",
+        counter_tokens=("count",), label_index=1, body_range=(2, 26),
+        decrement_index=27, branch_index=28,
+    )
+    fields = ("a", "b", "f0", "g0", "f1", "g1", "t0", "t1", "t2")
+    round_routine = emit_invert_block(block, body, InvertBlockSpec(
+        "divsteps47Round", "def divsteps47Round (s : Divsteps47State) : Divsteps47State :=",
+        (("s", "Divsteps47State"),), {field: f"s.{field}" for field in fields}, fields,
+        "  ⟨a, b, f0, g0, f1, g1, t0, t1, t2⟩",
+        "One mechanically factored iteration of the fixed final 47-step loop. The factorer "
+        "checks the source count, label, decrement, backedge, and exact body slice.",
+        arg_fields={"s": list(fields)},
+    ))
+
+    # The source initializes only the public loop counter in assembly. Rust initializes the row.
+    emitter = Emitter(asm_source.declaration_directions(block, "divsteps47"), {}, inversion=True)
+    emitter.helper_proof_mode = True
+    emitter.divsteps_clear_values = True
+    bindings = {"a": "a", "b": "b", "f0": "1", "g0": "0", "f1": "0", "g1": "1"}
+    for declaration in block.declarations:
+        if declaration.kind in ("in", "inout"):
+            expression = bindings[declaration.name]
+            bound = gen.BOUND_HYPS.get(expression, f"h{expression}") if not expression.isdigit() else "by decide"
+            emitter.bind_argument(
+                declaration.name, expression, f"input {declaration.value}", bound=bound,
+            )
+    emitter.pc = 0
+    emitter.emit_instruction(instructions[0])
+    # Scratch outputs are initialized by the loop before every read; arbitrary initial zeros expose
+    # no source behavior but provide a total state value to the recursive iterator.
+    for scratch in ("t0", "t1", "t2"):
+        emitter.bind(scratch, "0", "unread scratch initialization", reads=(), fact=("mov", "0"))
+    call_args = list(fields)
+    emitter.bind(
+        "loop", "iterate divsteps47Round 47 ⟨" + ", ".join(call_args) + "⟩",
+        "factored fixed 47-iteration loop", reads=set(call_args),
+        fact=("call", "iterate divsteps47Round 47 ⟨" + ", ".join("{%d}" % i for i in range(len(call_args))) + "⟩", call_args),
+    )
+    for field in fields:
+        emitter.bind(field, f"loop.{field}", "fixed loop output", reads={"loop"},
+                     fact=("callout", "loop", field))
+    results = ["f0", "g0", "f1", "g1"]
+    main = Routine(
+        "The complete fixed 47-low-limb iteration helper.",
+        "def divsteps47 (a b : Nat) : InvertMatrix :=",
+        emitter.render(results), "  ⟨f0, g0, f1, g1⟩", "divsteps47", emitter, results,
+    )
+    return [round_routine, main]
+
+
+def all_invert_routines(source: Optional[str] = None) -> List[Routine]:
+    if source is None:
+        source = INVERT_SOURCE.read_text()
+    return emit_divsteps31_routines(source) + emit_simple_invert_routines(source) + \
+        emit_divsteps47_routines(source)
+
+
 def emit_routines(source: str, config: RoutineConfig):
     """Emit a source routine, plus its helper when repeated rounds are factored."""
     routine = emit_routine(source, config)
@@ -1077,8 +2090,8 @@ def transcribe(source: str, config: RoutineConfig) -> str:
     return "\n".join(routine.text(comment_column([routine])) for routine in routines)
 
 
-def gen_program(source: Optional[str] = None) -> str:
-    routines = all_routines(source)
+def gen_program(source: Optional[str] = None, invert_source: Optional[str] = None) -> str:
+    routines = all_routines(source, invert_source)
     return HEADER + "\n".join(
         routine.text(comment_column([routine])) for routine in routines
     ) + FOOTER
@@ -1130,21 +2143,57 @@ namespace PastaAsm.X86_64
     )
 
 
-def all_routines(source: Optional[str] = None):
-    """Return the validated x86-64 assembly routines and factored round helper."""
+def gen_invert_vectors(lines: Sequence[str]) -> str:
+    """Generate x86-64 inversion-composition checks from mathematical expectations."""
+    return gen.render_inversion_vectors(
+        lines,
+        imports="import PastaAsm.Fields\nimport PastaAsm.X86_64.Compositions\n",
+        introduction="""
+/-!
+# Mathematical reference vectors for the inversion composition
+
+GENERATED by `lean/scripts/gen.py` from the distinct canonical operands in
+`test-vectors/pasta_mul-armv8-vectors.txt`; do not edit by hand. Each example asks the
+Lean kernel to evaluate the actual x86-64 `invert` composition, including all generated
+assembly-block transcriptions used by the Rust driver.
+
+Only the operands come from the AArch64 hardware corpus. The expected values are derived
+independently by modular arithmetic, not captured from AArch64 or x86-64 inversion hardware:
+zero maps to zero; for nonzero Montgomery residues `input * result = R^2 (mod p)`, where
+`R = 2^256`. Thus these concrete examples supplement, but do not replace, a universal inversion
+correctness proof.
+
+The modulus limbs and `inv` are `pallasBase` and `vestaBase` from `Fields.lean`, the crate's
+constants for its `Fp` (the Pallas base field) and `Fq` (the Vesta base field).
+-/
+
+namespace PastaAsm.X86_64
+
+""",
+        namespace="PastaAsm.X86_64",
+    )
+
+
+def all_routines(source: Optional[str] = None, invert_source: Optional[str] = None):
+    """Return every validated x86-64 block routine and mechanically factored helper."""
     if source is None:
         source = SOURCE.read_text()
+    if invert_source is None:
+        invert_source = INVERT_SOURCE.read_text()
     validate_high_limb(source)
     routines = []
     for config in ROUTINES:
         routines.extend(emit_routines(source, config))
+    routines.extend(all_invert_routines(invert_source))
     return routines
 
 
 def generated_outputs():
     """Return the x86-64 generated paths and contents without writing files."""
+    lines = VECTORS.read_text().splitlines()
     return [
         (OUTPUT, gen_program()),
-        (OUTPUT_VECTORS, gen_vectors(VECTORS.read_text().splitlines())),
+        (OUTPUT_VECTORS, gen_vectors(lines)),
+        (OUTPUT_INVERT_VECTORS, gen_invert_vectors(lines)),
     ]
 

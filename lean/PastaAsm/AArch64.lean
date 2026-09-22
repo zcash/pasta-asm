@@ -6,6 +6,7 @@ import PastaAsm.AArch64.Semantics
 import PastaAsm.AArch64.Transcription
 import PastaAsm.AArch64.Compositions
 import PastaAsm.AArch64.Vectors
+import PastaAsm.AArch64.InvertVectors
 import PastaAsm.AArch64.Spec
 import PastaAsm.AArch64.Entry
 

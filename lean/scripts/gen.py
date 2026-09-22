@@ -8,7 +8,10 @@ Reads the inline `asm!` blocks in `src/aarch64.rs` and `src/x86_64.rs`, and writ
   with the instruction as a trailing comment;
 - `lean/PastaAsm/<Architecture>/Vectors.lean`: one kernel-checked example per line of
   `test-vectors/pasta_mul-armv8-vectors.txt` whose operands are inside the backend's
-  contracts, the outputs of the real routines on an Apple M-series machine.
+  contracts, the outputs of the real routines on an Apple M-series machine; and
+- `lean/PastaAsm/<Architecture>/InvertVectors.lean`: one kernel-checked evaluation of the
+  actual inversion composition for every distinct canonical corpus operand, against an
+  independently computed mathematical expectation.
 
 The transcription is deliberately mechanical. A block is read from its template lines, with
 the operand placeholders as register names, rebound by each instruction that writes them:
@@ -59,6 +62,7 @@ ARG_FIELDS["product"] = [f"l{i}" for i in range(8)]
 BOUND_HYPS = {
     "t": "ht", "modulus": "hm", "lhs": "hlhs", "rhs": "hrhs",
     "value": "hv", "product": "hproduct", "acc": "hacc",
+    "a": "ha", "b": "hb", "u": "hu", "v": "hv",
 }
 INV_BOUND_HYP = "hinv_lt"
 SKELETON_WIDTH = 100
@@ -241,6 +245,48 @@ def render_vectors(lines, *, imports, introduction, namespace, in_contract, omis
     return "".join(out)
 
 
+def inversion_vectors(lines):
+    """Derived inversion checks on every distinct canonical operand in the corpus.
+
+    Only the inputs come from the hardware corpus. The expected output is computed
+    independently by modular inversion, not claimed to be an inversion hardware capture.
+    Inputs and results are Montgomery residues, so input * result = R^2 (mod p).
+    """
+    seen = set()
+    vectors = []
+    for _op, key, vals in parse_vectors(lines):
+        p = MODULUS_INT[key]
+        for operand in vals[:-1]:
+            value = int(operand, 16)
+            if value >= p or (key, value) in seen:
+                continue
+            seen.add((key, value))
+            result = 0 if value == 0 else pow(value, -1, p) * pow(2, 512, p) % p
+            vectors.append((key, value, result))
+    return vectors
+
+
+def render_inversion_vectors(lines, *, imports, introduction, namespace):
+    """Render kernel checks of an architecture's actual inversion composition."""
+    vectors = inversion_vectors(lines)
+    out = [HEADER_VECTORS, imports, introduction]
+    for key, value, result in vectors:
+        prefix = FIELDS[key]
+        out.append(
+            "example :\n"
+            "    invert\n"
+            f"      (Limbs.ofNat 0x{value:064x})\n"
+            f"      {prefix}.modulus {prefix}.inv =\n"
+            f"    (Limbs.ofNat 0x{result:064x}) := by\n"
+            "  decide +kernel\n\n"
+        )
+    out.append(
+        f"\n-- {len(vectors)} vectors; every distinct canonical corpus operand is included.\n\n"
+        f"end {namespace}\n"
+    )
+    return "".join(out)
+
+
 # --- proof skeletons --------------------------------------------------------------------
 
 
@@ -378,7 +424,7 @@ def skeleton(routine):
         return ren.get(op, op)
 
     def expression_bound(op):
-        field = re.fullmatch(r"(\w+)\.(l[0-7])", op)
+        field = re.fullmatch(r"(\w+)\.(l[0-9]+)", op)
         if field and field.group(1) in BOUND_HYPS:
             arg, limb = field.groups()
             return f"{BOUND_HYPS[arg]}.{proj(arg, limb, routine.arg_fields)}"
@@ -657,7 +703,16 @@ SPEC_MANIFEST = {
 }
 
 # Missing proofs are tracked by routine, not by hypothetical files.
-UNPROVED_ROUTINES = {}
+UNPROVED_ROUTINES = {
+    "AArch64": (
+        "divsteps31Round", "divsteps31", "updateAB", "addWords", "mulSigned",
+        "divsteps47Round", "divsteps47", "normalizeCoefficient", "reduceOnce",
+    ),
+    "X86_64": (
+        "divsteps31Round", "divsteps31", "updateAbShift", "addWordsLimb", "mulSignedLimb",
+        "normalizeNegative", "normalizeExcess", "reduceOnce", "divsteps47Round", "divsteps47",
+    ),
+}
 
 
 def architecture_routines():

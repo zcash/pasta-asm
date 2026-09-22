@@ -26,6 +26,7 @@ class Declaration:
     value: str
     output: Optional[str]
     fixed: bool = False
+    constraint: Optional[str] = "reg"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,6 +36,40 @@ class ParsedFunction:
     locals: Dict[str, Tuple[str, int]]
     returns: Tuple[str, ...]
     options: Set[str]
+
+
+@dataclasses.dataclass(frozen=True)
+class ParsedAsmBlock:
+    """One validated helper ``asm!`` invocation and its source span."""
+
+    instructions: Tuple[str, ...]
+    declarations: Tuple[Declaration, ...]
+    options: Set[str]
+    start: int
+    end: int
+
+
+@dataclasses.dataclass(frozen=True)
+class RustRegion:
+    """A named, validated piece of helper composition surrounding ``asm!``."""
+
+    name: str
+    source: str
+    start: int
+    end: int
+
+
+@dataclasses.dataclass(frozen=True)
+class ParsedHelperFunction:
+    """Assembly blocks and explicitly separated Rust composition for one helper."""
+
+    signature: str
+    blocks: Tuple[ParsedAsmBlock, ...]
+    rust_regions: Tuple[RustRegion, ...]
+    start: int
+    body_start: int
+    body_end: int
+    end: int
 
 
 def _line_comment_end(text: str, start: int) -> int:
@@ -205,6 +240,51 @@ def _strip_comments(text: str) -> str:
     return "".join(pieces)
 
 
+def _rust_tokens(text: str) -> Tuple[str, ...]:
+    """Tokenize the supported Rust surface while discarding only trivia."""
+    tokens: List[str] = []
+    punctuators = (
+        "<<=", ">>=", "..=", "::", "->", "=>", "..", "<<", ">>",
+        "&&", "||", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=",
+        "%=", "&=", "|=", "^=",
+    )
+    pos = 0
+    while pos < len(text):
+        next_pos = _skip_trivia(text, pos)
+        if next_pos != pos:
+            pos = next_pos
+            continue
+        raw_end = _raw_string_end(text, pos)
+        if raw_end is not None:
+            tokens.append(text[pos:raw_end])
+            pos = raw_end
+            continue
+        if text[pos] == '"':
+            end, _ = _quoted_end(text, pos)
+            tokens.append(text[pos:end])
+            pos = end
+            continue
+        if text[pos] == "'":
+            end = _char_literal_end(text, pos)
+            if end is not None:
+                tokens.append(text[pos:end])
+                pos = end
+                continue
+        word = re.match(r"[A-Za-z_]\w*|[0-9][A-Za-z0-9_]*", text[pos:])
+        if word:
+            tokens.append(word.group(0))
+            pos += len(word.group(0))
+            continue
+        punctuator = next((item for item in punctuators if text.startswith(item, pos)), None)
+        if punctuator is not None:
+            tokens.append(punctuator)
+            pos += len(punctuator)
+        else:
+            tokens.append(text[pos])
+            pos += 1
+    return tuple(tokens)
+
+
 def _argument_end(text: str, start: int) -> int:
     """Find an asm argument's top-level comma, validating its delimiters."""
     pairs = {"(": ")", "[": "]", "{": "}"}
@@ -242,6 +322,10 @@ def parse_declaration(
     reserved_names: Set[str] = frozenset(),
     fixed_registers: Set[str] = frozenset(),
     const_operands: Set[str] = frozenset(),
+    allowed_kinds: Set[str] = frozenset(("in", "out", "inout")),
+    allowed_constraints: Set[str] = frozenset(("reg",)),
+    named_fixed_outputs: Set[str] = frozenset(),
+    inout_expression_outputs: Set[str] = frozenset(),
 ) -> Declaration:
     """Parse one inline-assembly declaration under backend-specific restrictions."""
     declaration = text.strip().rstrip(",").strip()
@@ -252,24 +336,38 @@ def parse_declaration(
             raise GenerationError(f"reserved operand name {name}: {text.strip()}")
         if value not in const_operands:
             raise GenerationError(f"unsupported const operand binding: {text.strip()}")
-        return Declaration(name, "const", value, None)
+        return Declaration(name, "const", value, None, constraint=None)
 
-    fixed = re.fullmatch(r'(in|out|inout)\("([^"]+)"\)\s+(.+)', declaration)
+    fixed = re.fullmatch(r'([A-Za-z_]\w*)\("([^"]+)"\)\s+(.+)', declaration)
     if fixed:
         kind, register, value = fixed.groups()
-        if register not in fixed_registers or kind != "out" or value.strip() != "_":
+        value = value.strip()
+        supported_output = value == "_" or (
+            register in named_fixed_outputs and re.fullmatch(_IDENTIFIER, value)
+        )
+        if (register not in fixed_registers or kind != "out"
+                or kind not in allowed_kinds or not supported_output):
             raise GenerationError(f"unsupported fixed-register binding: {text.strip()}")
-        return Declaration(register, kind, value.strip(), None, fixed=True)
+        return Declaration(
+            register,
+            kind,
+            value,
+            None if value == "_" else value,
+            fixed=True,
+            constraint=register,
+        )
 
     named = re.fullmatch(
-        r"([A-Za-z_]\w*)\s*=\s*(in|out|inout)\(([^)]+)\)\s+(.+)", declaration
+        r"([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\(([^)]+)\)\s+(.+)", declaration
     )
     if not named:
         raise GenerationError(f"unsupported operand binding: {text.strip()}")
     name, kind, constraint, body = named.groups()
     if name in reserved_names:
         raise GenerationError(f"reserved operand name {name}: {text.strip()}")
-    if constraint.strip() != "reg":
+    if kind not in allowed_kinds:
+        raise GenerationError(f"unsupported operand kind: {text.strip()}")
+    if constraint.strip() not in allowed_constraints:
         raise GenerationError(f"unsupported operand constraint: {text.strip()}")
     pieces = [piece.strip() for piece in body.split("=>")]
     if len(pieces) > 2 or (len(pieces) == 2 and kind != "inout"):
@@ -278,17 +376,21 @@ def parse_declaration(
     output = pieces[1] if len(pieces) == 2 else None
     if kind == "in" and output is not None:
         raise GenerationError(f"input operand has an output: {text.strip()}")
-    if kind == "out" and output is not None:
+    if kind in ("out", "lateout") and output is not None:
         raise GenerationError(f"output operand uses `=>`: {text.strip()}")
-    if kind == "out":
+    if kind in ("out", "lateout"):
         output = value
     elif kind == "inout" and output is None:
-        if not re.fullmatch(r"[A-Za-z_]\w*", value):
+        if (not re.fullmatch(r"[A-Za-z_]\w*", value)
+                and value not in inout_expression_outputs):
+            requirement = (
+                "an allowed output" if inout_expression_outputs else "a local variable"
+            )
             raise GenerationError(
-                f"inout without `=>` must bind a local variable: {text.strip()}"
+                f"inout without `=>` must bind {requirement}: {text.strip()}"
             )
         output = value
-    return Declaration(name, kind, value, output)
+    return Declaration(name, kind, value, output, constraint=constraint.strip())
 
 
 def _parse_asm(
@@ -300,6 +402,10 @@ def _parse_asm(
     const_operands: Set[str],
     allowed_options: Set[str],
     required_options: Set[str],
+    allowed_kinds: Set[str] = frozenset(("in", "out", "inout")),
+    allowed_constraints: Set[str] = frozenset(("reg",)),
+    named_fixed_outputs: Set[str] = frozenset(),
+    inout_expression_outputs: Set[str] = frozenset(),
 ) -> Tuple[Tuple[str, ...], Tuple[Declaration, ...], Set[str]]:
     """Consume the complete restricted grammar of one `asm!` invocation."""
     instructions: List[str] = []
@@ -349,6 +455,10 @@ def _parse_asm(
                 reserved_names=reserved_names,
                 fixed_registers=fixed_registers,
                 const_operands=const_operands,
+                allowed_kinds=allowed_kinds,
+                allowed_constraints=allowed_constraints,
+                named_fixed_outputs=named_fixed_outputs,
+                inout_expression_outputs=inout_expression_outputs,
             ))
         pos = end if end == len(inner) else end + 1
 
@@ -574,6 +684,142 @@ def parse_function(
         body, masked_body, asm_close, function, result_count
     )
     return ParsedFunction(instructions, declarations, locals_map, returns, options)
+
+
+def parse_helper_function(
+    source: str,
+    function: str,
+    expected_signature: str,
+    expected_rust_regions: Sequence[Tuple[str, str]],
+    *,
+    reserved_names: Set[str] = frozenset(),
+    fixed_registers: Set[str] = frozenset(),
+    const_operands: Set[str] = frozenset(),
+    allowed_options: Set[str] = frozenset(("pure", "readonly", "nomem", "nostack")),
+    required_options: Set[str] = frozenset(("pure", "nostack")),
+    allowed_kinds: Set[str] = frozenset(("in", "out", "inout")),
+    allowed_constraints: Set[str] = frozenset(("reg",)),
+    named_fixed_outputs: Set[str] = frozenset(),
+    inout_expression_outputs: Set[str] = frozenset(),
+) -> ParsedHelperFunction:
+    """Extract every helper block and exactly validate all surrounding Rust.
+
+    ``expected_rust_regions`` names and specifies the composition before, between,
+    and after the helper's ``asm!`` invocations. Whitespace and comments may vary,
+    but no other Rust token may be added, removed, or changed.
+    """
+    masked_source = masked_noncode(source)
+    pattern = re.compile(
+        rf"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?fn\s+{re.escape(function)}"
+        rf"\s*(?:<[^>{{}};()]*>)?\s*\("
+    )
+    functions = list(pattern.finditer(masked_source))
+    if len(functions) != 1:
+        raise GenerationError(
+            f"expected exactly one `fn {function}`, found {len(functions)}"
+        )
+    found = functions[0]
+    signature_start = found.start()
+    signature_open = masked_source.find("(", found.start(), found.end())
+    signature_close = matching_delimiter(source, signature_open, "(", ")")
+    body_open = masked_source.find("{", signature_close + 1)
+    if body_open < 0:
+        raise GenerationError(f"{function}: missing function body")
+    body_close = matching_delimiter(source, body_open, "{", "}")
+    signature = source[signature_start:body_open].strip()
+    if _rust_tokens(signature) != _rust_tokens(expected_signature):
+        raise GenerationError(f"{function}: function signature does not match expected")
+
+    body = source[body_open + 1:body_close]
+    masked_body = masked_noncode(body)
+    macros = list(re.finditer(r"\basm\s*!\s*\(", masked_body))
+    if not macros:
+        raise GenerationError(f"{function}: expected at least one asm! block")
+    if len(expected_rust_regions) != len(macros) + 1:
+        raise GenerationError(
+            f"{function}: expected {len(macros) + 1} Rust regions for "
+            f"{len(macros)} asm! blocks, got {len(expected_rust_regions)}"
+        )
+
+    blocks: List[ParsedAsmBlock] = []
+    regions: List[RustRegion] = []
+    previous = 0
+    body_offset = body_open + 1
+    for index, asm in enumerate(macros):
+        asm_open = masked_body.find("(", asm.start(), asm.end())
+        asm_close = matching_delimiter(body, asm_open, "(", ")")
+        if index + 1 < len(macros) and asm_close >= macros[index + 1].start():
+            raise GenerationError(f"{function}: overlapping asm! blocks")
+
+        name, expected = expected_rust_regions[index]
+        actual = body[previous:asm.start()]
+        if _rust_tokens(actual) != _rust_tokens(expected):
+            raise GenerationError(f"{function}: Rust region {name!r} does not match expected")
+        regions.append(RustRegion(
+            name=name,
+            source=actual,
+            start=body_offset + previous,
+            end=body_offset + asm.start(),
+        ))
+
+        instructions, declarations, options = _parse_asm(
+            body[asm_open + 1:asm_close], function,
+            reserved_names=reserved_names,
+            fixed_registers=fixed_registers,
+            const_operands=const_operands,
+            allowed_options=allowed_options,
+            required_options=required_options,
+            allowed_kinds=allowed_kinds,
+            allowed_constraints=allowed_constraints,
+            named_fixed_outputs=named_fixed_outputs,
+            inout_expression_outputs=inout_expression_outputs,
+        )
+        blocks.append(ParsedAsmBlock(
+            instructions=instructions,
+            declarations=declarations,
+            options=options,
+            start=body_offset + asm.start(),
+            end=body_offset + asm_close + 1,
+        ))
+        previous = asm_close + 1
+
+    name, expected = expected_rust_regions[-1]
+    actual = body[previous:]
+    if _rust_tokens(actual) != _rust_tokens(expected):
+        raise GenerationError(f"{function}: Rust region {name!r} does not match expected")
+    regions.append(RustRegion(
+        name=name,
+        source=actual,
+        start=body_offset + previous,
+        end=body_offset + len(body),
+    ))
+    return ParsedHelperFunction(
+        signature=signature,
+        blocks=tuple(blocks),
+        rust_regions=tuple(regions),
+        start=signature_start,
+        body_start=body_offset,
+        body_end=body_close,
+        end=body_close + 1,
+    )
+
+
+def validate_declarations(
+    actual: Sequence[Declaration],
+    expected: Sequence[Declaration],
+    context: str,
+) -> None:
+    """Require an asm block's complete ordered operand wiring to match its spec."""
+    actual_tuple = tuple(actual)
+    expected_tuple = tuple(expected)
+    for index in range(max(len(actual_tuple), len(expected_tuple))):
+        actual_declaration = actual_tuple[index] if index < len(actual_tuple) else None
+        expected_declaration = expected_tuple[index] if index < len(expected_tuple) else None
+        if actual_declaration != expected_declaration:
+            raise GenerationError(
+                f"{context}: declaration {index} does not match expected: "
+                f"expected {expected_declaration!r}, got {actual_declaration!r}"
+            )
 
 
 def declaration_directions(parsed: ParsedFunction, function: str) -> Dict[str, str]:
