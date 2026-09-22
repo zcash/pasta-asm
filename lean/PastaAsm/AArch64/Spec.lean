@@ -5,6 +5,11 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 -/
 import PastaAsm.AArch64.Spec.Add
 import PastaAsm.AArch64.Spec.Invert
+import PastaAsm.AArch64.Spec.Invert.Arithmetic
+import PastaAsm.AArch64.Spec.Invert.Divsteps.Round47
+import PastaAsm.AArch64.Spec.Invert.Divsteps.Round31
+import PastaAsm.AArch64.Spec.Invert.Divsteps.Steps47
+import PastaAsm.AArch64.Spec.Invert.Divsteps.Approximation
 import PastaAsm.AArch64.Spec.Sub
 import PastaAsm.AArch64.Spec.Mul
 import PastaAsm.AArch64.Spec.Square
