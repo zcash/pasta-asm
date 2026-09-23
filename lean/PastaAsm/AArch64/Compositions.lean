@@ -3,6 +3,7 @@ Copyright (c) 2026 the pasta-asm contributors.
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
 import PastaAsm.Compositions
+import PastaAsm.Fields
 import PastaAsm.Inversion
 import PastaAsm.AArch64.Transcription
 
@@ -55,19 +56,17 @@ def invertBatches : Nat → InvertState → InvertState
   | 0, state => state
   | count + 1, state => invertBatches count (invertBatch state)
 
-/-- The AArch64 Rust inversion driver: fifteen 31-step batches and one final 47-step batch. -/
+/-- The AArch64 Rust inversion driver: fifteen 31-step batches, one final 47-step batch,
+full-width Montgomery reduction, and conversion back to Montgomery form with `R² mod p`. -/
 def invert (value modulus : Limbs) (inv : Nat) : Limbs :=
   let initial : InvertState :=
-    ⟨fromMont value modulus inv, modulus, ⟨1, 0, 0, 0, 0, 0, 0, 0, 0⟩,
+    ⟨value, modulus, ⟨1, 0, 0, 0, 0, 0, 0, 0, 0⟩,
       ⟨0, 0, 0, 0, 0, 0, 0, 0, 0⟩⟩
   let state := invertBatches 15 initial
   let row := divsteps47 state.a.l0 state.b.l0
   let coefficient := invertLincomb state.u state.v row.f1 row.g1
   let split := normalizeCoefficient coefficient modulus
-  let low := fromMont split.low modulus inv
-  let high1 := reduceOnce split.high modulus
-  let high2 := reduceOnce high1 modulus
-  let high := reduceOnce high2 modulus
-  addMod low high modulus
+  let reduced := redcMont split.low split.high modulus inv
+  mulMont reduced (montgomeryR2 modulus) modulus inv
 
 end PastaAsm.AArch64

@@ -17,7 +17,7 @@ use super::{Limbs, add, from_mont, sub};
     target_arch = "aarch64",
     all(target_arch = "x86_64", target_pointer_width = "64")
 ))]
-use super::{mul, sqr_n_mul, square};
+use super::{montgomery_r2, mul, sqr_n_mul, square};
 
 /// One field's constants and known answers.
 struct Field {
@@ -186,6 +186,17 @@ fn p_minus_1(f: &Field) -> Limbs {
     limbs
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
+#[test]
+fn montgomery_r2_selects_field_constant() {
+    for f in FIELDS {
+        assert_eq!(montgomery_r2(&f.modulus), f.r2);
+    }
+}
+
 #[test]
 fn add_known_answers() {
     for f in FIELDS {
@@ -290,6 +301,10 @@ fn from_mont_known_answers() {
     );
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 /// The reference vectors: outputs of Semolina's `mul_mont_pasta`, `sqr_mont_pasta`, and
 /// `from_mont_pasta` as vendored by pasta_curves at `8ad85e9fab7929f6236960e472f432a4bd9ccd74`,
 /// recorded on an Apple M-series machine by the test in `test-vectors/dump-asm-vectors.patch`
@@ -298,6 +313,10 @@ fn from_mont_known_answers() {
 /// 64 big-endian hex digits.
 const VECTORS: &str = include_str!("../test-vectors/pasta_mul-armv8-vectors.txt");
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 /// A 256-bit value written as 64 big-endian hex digits, as little-endian limbs.
 fn parse_limbs(hex: &str) -> Limbs {
     assert_eq!(hex.len(), 64);
@@ -305,6 +324,10 @@ fn parse_limbs(hex: &str) -> Limbs {
     [limb(0), limb(1), limb(2), limb(3)]
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 /// A vector line: the routine, the field, the first operand, the second operand of a
 /// multiplication, and the recorded output.
 fn parse_vector(line: &str) -> (&str, &'static Field, Limbs, Option<Limbs>, Limbs) {
@@ -325,6 +348,10 @@ fn parse_vector(line: &str) -> (&str, &'static Field, Limbs, Option<Limbs>, Limb
     }
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 /// Whether a vector's operands are inside its routine's contract: for the multiplication, a
 /// canonical left operand, or a canonical right operand whose limbs 1 to 3 are at most
 /// `2^64 - 3` (the contract that the proofs establish); for the squaring, the addition, and
@@ -351,6 +378,10 @@ fn in_contract(op: &str, f: &Field, first: &Limbs, second: Option<&Limbs>) -> bo
     }
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 /// Runs the routine that a vector names on its operands.
 fn run(op: &str, f: &Field, first: &Limbs, second: Option<&Limbs>) -> Limbs {
     match op {
@@ -363,6 +394,10 @@ fn run(op: &str, f: &Field, first: &Limbs, second: Option<&Limbs>) -> Limbs {
     }
 }
 
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64")
+))]
 /// Every reference vector whose operands are inside its routine's contract is reproduced by
 /// the crate's routines, which transcribe the routines that produced the vectors. The 180
 /// vectors outside the contracts, multiplications with unreduced operands, are not run: the

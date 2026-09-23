@@ -4,6 +4,7 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 -/
 import PastaAsm.X86_64.Transcription
 import PastaAsm.Compositions
+import PastaAsm.Fields
 import PastaAsm.Inversion
 
 /-!
@@ -161,19 +162,23 @@ def normalizeCoefficient (value : PastaAsm.WideLimbs) (modulus : Limbs) : Limbs 
   let high := normalizeExcess ⟨first.h0, first.h1, first.h2, first.h3⟩ modulus2 first.excess
   (value.low, high)
 
-/-- The x86-64 Rust inversion driver: fifteen 31-step batches and one final 47-step batch. -/
+/-- The normalized coefficient as the eight-limb value passed to the full REDC block. -/
+def normalize512 (value : PastaAsm.WideLimbs) (modulus : Limbs) : WideLimbs :=
+  let normalized := normalizeCoefficient value modulus
+  ⟨normalized.1.l0, normalized.1.l1, normalized.1.l2, normalized.1.l3,
+    normalized.2.l0, normalized.2.l1, normalized.2.l2, normalized.2.l3⟩
+
+/-- The x86-64 Rust inversion driver: fifteen 31-step batches, one final 47-step batch, full
+512-bit Montgomery reduction, and multiplication by the field's canonical `R²` constant. -/
 def invert (value modulus : Limbs) (inv : Nat) : Limbs :=
   let initial : InvertState :=
-    ⟨fromMont value modulus inv, modulus, ⟨1, 0, 0, 0, 0, 0, 0, 0, 0⟩,
+    ⟨value, modulus, ⟨1, 0, 0, 0, 0, 0, 0, 0, 0⟩,
       ⟨0, 0, 0, 0, 0, 0, 0, 0, 0⟩⟩
   let state := invertBatches 15 initial
   let matrix := divsteps47 state.a.l0 state.b.l0
   let coefficient := invertLincomb9 state.u state.v matrix.f1 matrix.g1
-  let normalized := normalizeCoefficient coefficient modulus
-  let low := fromMont normalized.1 modulus inv
-  let high1 := reduceOnce normalized.2 modulus
-  let high2 := reduceOnce high1 modulus
-  let high := reduceOnce high2 modulus
-  addMod low high modulus
+  let normalized := normalize512 coefficient modulus
+  let reduced := redcMont normalized modulus inv
+  mulMont reduced (montgomeryR2 modulus) modulus inv
 
 end PastaAsm.X86_64

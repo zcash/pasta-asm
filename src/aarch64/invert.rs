@@ -1,13 +1,14 @@
-// Copyright Supranational LLC (the Semolina v0.1.4 inversion routine).
+// Copyright Supranational LLC (the Semolina v0.1.4 inversion and REDC routines).
 // Copyright the pasta-asm contributors (the inline-assembly adaptation and Rust driver).
 // SPDX-License-Identifier: Apache-2.0
 
 //! Constant-time inversion for the AArch64 backend.
 //!
 //! The assembly kernels below are register-renamed transcriptions of helpers
-//! from Semolina v0.1.4's `ct_inverse_mod_256-armv8.pl`. The fixed-width
-//! coefficient arithmetic and Rust driver adapt the upstream routine rather
-//! than literally transcribing its complete instruction stream. The driver
+//! from Semolina v0.1.4's `ct_inverse_mod_256-armv8.pl` and
+//! `pasta_mul-armv8.pl`. The fixed-width coefficient arithmetic and Rust driver
+//! adapt the upstream routine rather than literally transcribing its complete
+//! instruction stream. The driver
 //! runs fifteen 31-iteration approximation batches and one final 47-iteration
 //! low-limb batch, for a fixed schedule of 512 iterations. Input-dependent
 //! selections in the assembly use `CSEL`; Rust controls only public loop bounds.
@@ -32,12 +33,10 @@ type Wide = [u64; 9];
 
 /// Inverts a canonical Montgomery residue for a Pasta modulus.
 ///
-/// The input is first taken out of Montgomery form. For nonzero input `x`,
-/// Semolina's coefficient is congruent to `x^-1 * R^2` modulo the modulus;
-/// Montgomery-reducing its 512-bit split yields the requested `x^-1 * R`.
-/// The normalized high half is below `R = 2^256`. Every Pasta modulus is
-/// greater than `R / 4`, so three conditional subtractions make the high half
-/// canonical before adding it to the reduced low half. Zero maps to zero.
+/// For nonzero Montgomery input `xR`, Semolina's coefficient is congruent to
+/// `(xR)^-1 * R^2 = x^-1 * R` modulo the modulus. REDC removes one factor of
+/// `R`; multiplying by `R^2 mod p` restores the requested Montgomery residue
+/// `x^-1 * R`. Zero maps to zero.
 ///
 /// # Safety contract
 ///
@@ -45,11 +44,7 @@ type Wide = [u64; 9];
 /// equal `-modulus[0]^-1 mod 2^64`, as required by the public entry point.
 #[inline]
 pub(crate) fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    // The divstep relation is applied to the ordinary integer x. For nonzero x,
-    // starting from x rather than xR makes the selected coefficient congruent
-    // to x^-1 R^2 modulo p; REDC of its 512-bit split therefore produces the
-    // desired Montgomery residue x^-1 R. The zero input remains zero.
-    let mut a = crate::from_mont(value, modulus, inv);
+    let mut a = *value;
     let mut b = *modulus;
     let mut u: Wide = [1, 0, 0, 0, 0, 0, 0, 0, 0];
     let mut v: Wide = [0; 9];
@@ -69,16 +64,14 @@ pub(crate) fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     let (f1, g1) = divsteps_47(a[0], b[0]);
     let coefficient = lincomb(&u, &v, f1, g1);
     let (low, high) = normalize_coefficient(&coefficient, modulus);
+    let reduced = redc(&low, &high, modulus, inv);
+    let rr = crate::montgomery_r2(modulus);
 
-    // REDC(low + high*R) = from_mont(low) + high (mod p). Normalization returns
-    // high in four limbs, so high < R = 2^256. Both Pasta moduli are greater
-    // than R/4, hence high < 4*modulus. Three fixed conditional subtractions
-    // therefore make high canonical before the final addition.
-    let low = crate::from_mont(&low, modulus, inv);
-    let high = reduce_once(high, modulus);
-    let high = reduce_once(high, modulus);
-    let high = reduce_once(high, modulus);
-    super::add(&low, &high, modulus)
+    // `redc_mont_pasta`'s single subtraction does not make its output canonical
+    // for every 512-bit input. `rr` is canonical and each of its upper limbs is
+    // far below `2^64 - 3`, so `mul` accepts the unrestricted `reduced` lhs and
+    // returns the canonical Montgomery result without strengthening REDC's range.
+    super::mul(&reduced, &rr, modulus, inv)
 }
 
 /// One transition matrix produced by a 31-iteration approximation batch.
@@ -584,7 +577,143 @@ fn normalize_coefficient(value: &Wide, modulus: &Limbs) -> (Limbs, Limbs) {
     (low, [w4, w5, w6, w7])
 }
 
+/// Montgomery-reduces an arbitrary 512-bit integer using Semolina's
+/// `redc_mont_pasta` schedule.
+///
+/// This is the generator's `__mul_by_1_mont_pasta` low-half reduction followed
+/// by its high-half addition, excess-carry subtraction, and conditional select.
+/// For a 512-bit input `T < R^2`, low reduction is at most `p`; adding the high
+/// half makes the candidate less than `R + p`, so the selected result is below
+/// `R`. Its single subtraction need not make that result canonical (`< p`).
+#[inline(always)]
+fn redc(low: &Limbs, high: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
+    let (mut r0, mut r1, mut r2, mut r3) = (low[0], low[1], low[2], low[3]);
+
+    // SAFETY: this is a register-renamed transcription of Semolina v0.1.4's
+    // `redc_mont_pasta` and `__mul_by_1_mont_pasta`. Rust reads every fixed
+    // input limb into a register; the block performs no memory or stack access.
+    // All input-dependent selection is constant-time. Early-clobber inout and
+    // output operands keep the low accumulator and scratch registers distinct
+    // from high limbs and public modulus inputs while they remain live.
+    unsafe {
+        asm!(
+            // Low reduction round 0.
+            "mul {q}, {inv}, {r0}",
+            "mul {t1}, {p1}, {q}",
+            "lsl {t3}, {q}, #62",
+            "subs xzr, {r0}, #1",
+            "umulh {t0}, {p0}, {q}",
+            "adcs {r1}, {r1}, {t1}",
+            "umulh {t1}, {p1}, {q}",
+            "adcs {r2}, {r2}, xzr",
+            "adcs {r3}, {r3}, {t3}",
+            "lsr {t3}, {q}, #2",
+            "adc {r4}, xzr, xzr",
+            "adds {r0}, {r1}, {t0}",
+            "adcs {r1}, {r2}, {t1}",
+            "adcs {r2}, {r3}, xzr",
+            "mul {q}, {inv}, {r0}",
+            "adc {r3}, {r4}, {t3}",
+
+            // Low reduction round 1.
+            "mul {t1}, {p1}, {q}",
+            "lsl {t3}, {q}, #62",
+            "subs xzr, {r0}, #1",
+            "umulh {t0}, {p0}, {q}",
+            "adcs {r1}, {r1}, {t1}",
+            "umulh {t1}, {p1}, {q}",
+            "adcs {r2}, {r2}, xzr",
+            "adcs {r3}, {r3}, {t3}",
+            "lsr {t3}, {q}, #2",
+            "adc {r4}, xzr, xzr",
+            "adds {r0}, {r1}, {t0}",
+            "adcs {r1}, {r2}, {t1}",
+            "adcs {r2}, {r3}, xzr",
+            "mul {q}, {inv}, {r0}",
+            "adc {r3}, {r4}, {t3}",
+
+            // Low reduction round 2.
+            "mul {t1}, {p1}, {q}",
+            "lsl {t3}, {q}, #62",
+            "subs xzr, {r0}, #1",
+            "umulh {t0}, {p0}, {q}",
+            "adcs {r1}, {r1}, {t1}",
+            "umulh {t1}, {p1}, {q}",
+            "adcs {r2}, {r2}, xzr",
+            "adcs {r3}, {r3}, {t3}",
+            "lsr {t3}, {q}, #2",
+            "adc {r4}, xzr, xzr",
+            "adds {r0}, {r1}, {t0}",
+            "adcs {r1}, {r2}, {t1}",
+            "adcs {r2}, {r3}, xzr",
+            "mul {q}, {inv}, {r0}",
+            "adc {r3}, {r4}, {t3}",
+
+            // Low reduction round 3.
+            "mul {t1}, {p1}, {q}",
+            "lsl {t3}, {q}, #62",
+            "subs xzr, {r0}, #1",
+            "umulh {t0}, {p0}, {q}",
+            "adcs {r1}, {r1}, {t1}",
+            "umulh {t1}, {p1}, {q}",
+            "adcs {r2}, {r2}, xzr",
+            "adcs {r3}, {r3}, {t3}",
+            "lsr {t3}, {q}, #2",
+            "adc {r4}, xzr, xzr",
+            "adds {r0}, {r1}, {t0}",
+            "adcs {r1}, {r2}, {t1}",
+            "adcs {r2}, {r3}, xzr",
+            "adc {r3}, {r4}, {t3}",
+
+            // Add the unreduced high half and preserve its excess carry.
+            "adds {r0}, {r0}, {h0}",
+            "adcs {r1}, {r1}, {h1}",
+            "adcs {r2}, {r2}, {h2}",
+            "adcs {r3}, {r3}, {h3}",
+            "adc {r4}, xzr, xzr",
+
+            // Subtract all five limbs of p, including the excess carry, and
+            // retain the original candidate exactly when the subtraction borrows.
+            "subs {t0}, {r0}, {p0}",
+            "sbcs {t1}, {r1}, {p1}",
+            "sbcs {t2}, {r2}, {p2}",
+            "sbcs {t3}, {r3}, {p3}",
+            "sbcs xzr, {r4}, xzr",
+            "csel {r0}, {r0}, {t0}, lo",
+            "csel {r1}, {r1}, {t1}, lo",
+            "csel {r2}, {r2}, {t2}, lo",
+            "csel {r3}, {r3}, {t3}, lo",
+            r0 = inout(reg) r0,
+            r1 = inout(reg) r1,
+            r2 = inout(reg) r2,
+            r3 = inout(reg) r3,
+            h0 = in(reg) high[0],
+            h1 = in(reg) high[1],
+            h2 = in(reg) high[2],
+            h3 = in(reg) high[3],
+            p0 = in(reg) modulus[0],
+            p1 = in(reg) modulus[1],
+            p2 = in(reg) modulus[2],
+            p3 = in(reg) modulus[3],
+            inv = in(reg) inv,
+            q = out(reg) _,
+            r4 = out(reg) _,
+            t0 = out(reg) _,
+            t1 = out(reg) _,
+            t2 = out(reg) _,
+            t3 = out(reg) _,
+            options(pure, nomem, nostack),
+        );
+    }
+
+    [r0, r1, r2, r3]
+}
+
 /// Conditionally subtracts the modulus once.
+///
+/// Kept temporarily because the current generated Lean transcription and proof
+/// still refer to this block; the AArch64 Rust inversion path no longer calls it.
+#[allow(dead_code)]
 #[inline(always)]
 fn reduce_once(mut value: Limbs, modulus: &Limbs) -> Limbs {
     // SAFETY: register-only subtraction and conditional selection. This returns

@@ -1,3 +1,4 @@
+// Copyright Supranational LLC (the Pasta field constants from Semolina v0.1.4).
 // Copyright the pasta-asm contributors.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,17 +12,15 @@
 //! # Availability
 //!
 //! The crate provides a backend for `target_arch = "aarch64"` and, in part,
-//! for `target_arch = "x86_64"`: `add`, `sub`, `invert`, and `from_mont` are
-//! register-only and work on every x86-64 target, while `mul`, `square`,
-//! and the routines built on them read limbs through pointers, so they
-//! require 64-bit pointers (the
-//! x32 ABI's 32-bit pointers would break them; see the module docs for why
-//! registers alone cannot serve there) and a CPU with BMI2 and ADX (MULX,
-//! ADCX/ADOX: Intel Broadwell / AMD Zen or newer) at run time — neither is
-//! checked. `from_mont` and `invert` require BMI2 alone. On every other target this
-//! crate is empty, so a consumer gates
-//! its use on the same `cfg` and falls back to portable arithmetic
-//! elsewhere. Nothing is  assembled at build time: the blocks are compiled by
+//! for `target_arch = "x86_64"`: `add`, `sub`, and `from_mont` are register-only
+//! and work on every x86-64 target. `mul`, `square`, `sqr_n_mul`, and `invert`
+//! read limbs through pointers, so they require 64-bit pointers (the x32 ABI's
+//! 32-bit pointers would break them; see the module docs for why registers alone
+//! cannot serve there) and a CPU with BMI2 and ADX (MULX, ADCX/ADOX: Intel
+//! Broadwell / AMD Zen or newer) at run time. These requirements are not checked.
+//! `from_mont` requires BMI2 alone. On every other target this crate is empty, so
+//! a consumer gates its use on the same `cfg` and falls back to portable arithmetic
+//! elsewhere. Nothing is assembled at build time: the blocks are compiled by
 //! the Rust toolchain, so no C toolchain is needed, and the crate is `no_std`
 //! with no dependencies.
 //!
@@ -51,12 +50,65 @@ extern crate std;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_pointer_width = "64")
+    )
+))]
 mod invert_tests;
 
 /// Four little-endian 64-bit limbs, least significant first: a field element
 /// (in Montgomery form, or canonical after [`from_mont`]) or a modulus.
 pub type Limbs = [u64; 4];
+
+// `(1 << 512) mod p` for the Pallas base field, from Semolina v0.1.4's
+// Apache-2.0-licensed `src/consts.c`.
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64"),
+    doc
+))]
+const PALLAS_R2: Limbs = [
+    0x8c78ecb30000000f,
+    0xd7d30dbd8b0de0e7,
+    0x7797a99bc3c95d18,
+    0x096d41af7b9cb714,
+];
+
+// `(1 << 512) mod p` for the Vesta base field, from the same source.
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64"),
+    doc
+))]
+const VESTA_R2: Limbs = [
+    0xfc9678ff0000000f,
+    0x67bb433d891a16e3,
+    0x7fae231004ccf590,
+    0x096d41af7ccfdaa9,
+];
+
+/// Returns `R² mod modulus`, for `R = 2²⁵⁶` and either Pasta field modulus.
+///
+/// The modulus is a public parameter. The caller contract of the routines that
+/// use this helper restricts it to the Pallas or Vesta modulus.
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64"),
+    doc
+))]
+#[inline(always)]
+pub(crate) fn montgomery_r2(modulus: &Limbs) -> Limbs {
+    // The two supported moduli have different low limbs. Under the caller
+    // contract, a non-Pallas low limb therefore selects Vesta.
+    if modulus[0] == 0x992d30ed00000001 {
+        PALLAS_R2
+    } else {
+        VESTA_R2
+    }
+}
 
 /// Whether `value < modulus` as little-endian 256-bit integers.
 #[inline(always)]
@@ -247,9 +299,9 @@ pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv:
 /// an optional inverse must check for zero separately.
 ///
 /// Uses a fixed schedule of fifteen 31-step batches and a final 47-step batch,
-/// implemented with register-only inline assembly and fixed-bound Rust loops.
-/// On x86-64, the Montgomery conversions require BMI2, but not ADX or 64-bit
-/// pointers. CPU features are not checked at runtime.
+/// with fixed-bound Rust loops. On x86-64, inversion uses the general
+/// multiplication backend and therefore requires 64-bit pointers, BMI2, and ADX.
+/// CPU features are not checked at runtime.
 ///
 /// # Safety
 ///
@@ -257,6 +309,18 @@ pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv:
 ///
 /// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
 /// correctly derived from it. Any other values will cause undefined results.
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_pointer_width = "64"),
+    doc
+))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_pointer_width = "64")
+    )))
+)]
 #[inline(always)]
 pub fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     debug_assert!(
@@ -269,9 +333,20 @@ pub fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
         crate::aarch64::invert(value, modulus, inv)
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
     {
         crate::x86_64::invert(value, modulus, inv)
+    }
+
+    #[cfg(all(
+        doc,
+        not(any(
+            target_arch = "aarch64",
+            all(target_arch = "x86_64", target_pointer_width = "64")
+        ))
+    ))]
+    {
+        panic!("pasta_asm::invert is unavailable on this target")
     }
 }
 

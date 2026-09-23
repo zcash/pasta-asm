@@ -301,7 +301,7 @@ private theorem normalizeNegative_firstAdjustment
     (hmodulus2 : modulus2.toNat = 2 * p)
     (hp : PastaSizedOdd p)
     (hlower : -(coefficientRadix : Int) ≤ value.toInt)
-    (hupper : value.toInt < alignedModulus p) :
+    (hupper : value.toInt < coefficientRadix) :
     let first := normalizeNegative value modulus2
     let high : Limbs := ⟨first.h0, first.h1, first.h2, first.h3⟩
     high.Bounded ∧
@@ -378,7 +378,7 @@ private theorem normalizeNegative_firstAdjustment
       unfold signedExcess
       rw [if_neg (by omega), if_pos]
       rw [hfirst]
-      exact hupper.trans hMlt
+      exact hupper
     have hquot : (firstAdjustment p value.toInt - value.low.toNat) / splitRadix =
         highExcessValue value := by
       rw [hfirst, hsplit]
@@ -513,17 +513,17 @@ private theorem normalizeNegative_firstAdjustment
 /-- The actual x86-64 normalization composition exactly implements the shared
 integer model. The low half is preserved and the returned high half is below
 `2 * modulus`, as required by the following single reduction. -/
-theorem normalizeCoefficient_spec
+private theorem normalizeCoefficient_spec_of_lt_coefficientRadix
     (value : PastaAsm.WideLimbs) (modulus : Limbs)
     (hv : value.Bounded) (hm : modulus.Bounded)
     (hp : PastaSizedOdd modulus.toNat)
     (hlower : -(coefficientRadix : Int) ≤ value.toInt)
-    (hupper : value.toInt < alignedModulus modulus.toNat) :
+    (hupper : value.toInt < coefficientRadix) :
     let out := normalizeCoefficient value modulus
     out.1 = value.low ∧ out.2.Bounded ∧
       out.1.toNat + splitRadix * out.2.toNat =
         (normalize modulus.toNat value.toInt).toNat ∧
-      out.2.toNat < 2 * modulus.toNat := by
+      out.2.toNat < splitRadix := by
   dsimp only
   let modulus2 := doubledModulus modulus
   let first := normalizeNegative value modulus2
@@ -533,7 +533,7 @@ theorem normalizeCoefficient_spec
   obtain ⟨hm2, hm2eq⟩ := doubledModulus_spec modulus hm hpUpper
   obtain ⟨hhigh, hexcessWord, hfirstRep⟩ := normalizeNegative_firstAdjustment
     value modulus2 modulus.toNat hv hm2 hm2eq hp hlower hupper
-  obtain ⟨hnormNonneg, hnormUpper, _⟩ := normalize_spec hp hlower hupper
+  obtain ⟨hnormNonneg, hnormUpper, _⟩ := normalize_schedule_spec hp hlower hupper.le
   have hfirstExcess := signedExcess_eq_neg_one_or_zero_or_one
     (firstAdjustment modulus.toNat value.toInt)
   have halignedLt : alignedModulus modulus.toNat < coefficientRadix := by
@@ -670,10 +670,10 @@ theorem normalizeCoefficient_spec
       rfl
     exact_mod_cast hcast
   have hnormNatLt : (normalize modulus.toNat value.toInt).toNat <
-      alignedModulus modulus.toNat := by
+      coefficientRadix := by
     rw [Int.toNat_lt hnormNonneg]
     exact_mod_cast hnormUpper
-  have hhighDiv := split_high_lt_two_mul_modulus hnormNatLt
+  have hhighDiv := split_high_lt_splitRadix hnormNatLt
   have hdivEq : (normalize modulus.toNat value.toInt).toNat / splitRadix =
       outHigh.toNat := by
     rw [hdecomp, Nat.add_mul_div_left _ _ (by positivity),
@@ -682,8 +682,140 @@ theorem normalizeCoefficient_spec
   · change value.low.toNat + splitRadix * outHigh.toNat =
       (normalize modulus.toNat value.toInt).toNat
     exact hdecomp.symm
-  · change outHigh.toNat < 2 * modulus.toNat
+  · change outHigh.toNat < splitRadix
     rw [hdivEq] at hhighDiv
     exact hhighDiv
+
+/-- The actual x86-64 normalization composition implements the shared model on
+its complete closed schedule range.  The low half is preserved and the high
+half is an arbitrary bounded four-limb value; the epilogue reduces it three
+times before modular addition. -/
+theorem normalizeCoefficient_schedule_spec
+    (value : PastaAsm.WideLimbs) (modulus : Limbs)
+    (hv : value.Bounded) (hm : modulus.Bounded)
+    (hp : PastaSizedOdd modulus.toNat)
+    (hlower : -(coefficientRadix : Int) ≤ value.toInt)
+    (hupper : value.toInt ≤ coefficientRadix) :
+    let out := normalizeCoefficient value modulus
+    out.1 = value.low ∧ out.2.Bounded ∧
+      out.1.toNat + splitRadix * out.2.toNat =
+        (normalize modulus.toNat value.toInt).toNat ∧
+      out.2.toNat < splitRadix := by
+  by_cases hlt : value.toInt < coefficientRadix
+  · exact normalizeCoefficient_spec_of_lt_coefficientRadix value modulus hv hm hp hlower hlt
+  · have heq : value.toInt = coefficientRadix := by omega
+    have hnatLt := wideToNat_lt value hv
+    have hsign : value.l8 < 2^63 := by
+      unfold PastaAsm.WideLimbs.toInt at heq
+      split at heq <;> omega
+    have hnat : value.toNat = coefficientRadix := by
+      unfold PastaAsm.WideLimbs.toInt at heq
+      rw [if_pos hsign] at heq
+      exact_mod_cast heq
+    rcases value with ⟨v0, v1, v2, v3, v4, v5, v6, v7, v8⟩
+    simp only [PastaAsm.WideLimbs.Bounded, regMod] at hv
+    simp only [PastaAsm.WideLimbs.toNat, coefficientRadix] at hnat
+    have hwords : v0 = 0 ∧ v1 = 0 ∧ v2 = 0 ∧ v3 = 0 ∧ v4 = 0 ∧
+        v5 = 0 ∧ v6 = 0 ∧ v7 = 0 ∧ v8 = 1 := by
+      omega
+    rcases hwords with ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    let modulus2 := doubledModulus modulus
+    have hpUpper : modulus.toNat < 2^255 := hp.2.2
+    obtain ⟨hm2, hm2eq⟩ := doubledModulus_spec modulus hm hpUpper
+    have hm2pos : 0 < modulus2.toNat := by
+      change 0 < (doubledModulus modulus).toNat
+      rw [hm2eq]
+      have hpLower := hp.2.1
+      omega
+    have hsar : sar 1 63 = 0 := by
+      rw [sar63_eq_signMask (by decide), if_pos (by decide)]
+    have hfirst : normalizeNegative
+        (⟨0, 0, 0, 0, 0, 0, 0, 0, 1⟩ : PastaAsm.WideLimbs) modulus2 =
+        ⟨0, 0, 0, 0, 1⟩ := by
+      simp [normalizeNegative, hsar, bitAnd, addc, word, regMod]
+    let high : Limbs := ⟨0, 0, 0, 0⟩
+    let outHigh := normalizeExcess high modulus2 1
+    obtain ⟨houtBounded, carry, hcarry, hout⟩ :=
+      normalizeExcess_one_numeric high modulus2 (by simp [high, Limbs.Bounded])
+        hm2 hm2pos
+    have hm2Lt : modulus2.toNat < splitRadix := by
+      rw [hm2eq]
+      unfold splitRadix PastaSizedOdd at *
+      omega
+    have hhighZero : high.toNat = 0 := by rfl
+    have hcarry0 : carry = 0 := by
+      rw [hhighZero, zero_add] at hout
+      omega
+    have houtEq : outHigh.toNat + modulus2.toNat = splitRadix := by
+      rw [hcarry0, mul_zero, add_zero, hhighZero, zero_add] at hout
+      exact hout
+    have houtEq' : outHigh.toNat + 2 * modulus.toNat = splitRadix := by
+      change outHigh.toNat + (doubledModulus modulus).toNat = splitRadix at houtEq
+      rwa [hm2eq] at houtEq
+    have hnormalize : normalize modulus.toNat (coefficientRadix : Int) =
+        (splitRadix : Int) * outHigh.toNat := by
+      have hnonnegative : ¬ (coefficientRadix : Int) < 0 := by
+        norm_num [coefficientRadix]
+      have hnotBelow : ¬ (coefficientRadix : Int) < coefficientRadix := by simp
+      simp only [normalize, firstAdjustment, if_neg hnonnegative, secondAdjustment,
+        signedExcess, if_neg hnotBelow]
+      have hradix : coefficientRadix = splitRadix * splitRadix := by
+        norm_num [coefficientRadix, splitRadix, pow_add]
+      have houtEqInt : (outHigh.toNat : Int) + 2 * modulus.toNat = splitRadix := by
+        exact_mod_cast houtEq'
+      have hdiff : (splitRadix : Int) - 2 * modulus.toNat = outHigh.toNat := by
+        omega
+      rw [hradix]
+      unfold alignedModulus
+      push_cast
+      calc
+        ((splitRadix : Int) * splitRadix) -
+            1 * (2 * (modulus.toNat : Int) * splitRadix) =
+            (splitRadix : Int) * (splitRadix - 2 * modulus.toNat) := by ring
+        _ = (splitRadix : Int) * outHigh.toNat := by rw [hdiff]
+    have hnormalizeNonneg : 0 ≤ normalize modulus.toNat (coefficientRadix : Int) := by
+      rw [hnormalize]
+      positivity
+    dsimp only [normalizeCoefficient]
+    rw [hfirst]
+    change (⟨0, 0, 0, 0⟩ : Limbs) = (⟨0, 0, 0, 0⟩ : Limbs) ∧
+      outHigh.Bounded ∧
+      (⟨0, 0, 0, 0⟩ : Limbs).toNat + splitRadix * outHigh.toNat =
+        (normalize modulus.toNat (coefficientRadix : Int)).toNat ∧
+      outHigh.toNat < splitRadix
+    refine ⟨rfl, houtBounded, ?_, Limbs.toNat_lt outHigh houtBounded⟩
+    rw [show (⟨0, 0, 0, 0⟩ : Limbs).toNat = 0 by rfl, zero_add]
+    rw [hnormalize, Int.toNat_mul, Int.toNat_natCast, Int.toNat_natCast]
+    · norm_num [splitRadix]
+    · exact Int.natCast_nonneg outHigh.toNat
+
+/-- The original one-batch normalization correspondence remains available on
+its narrower interval. -/
+theorem normalizeCoefficient_spec
+    (value : PastaAsm.WideLimbs) (modulus : Limbs)
+    (hv : value.Bounded) (hm : modulus.Bounded)
+    (hp : PastaSizedOdd modulus.toNat)
+    (hlower : -(coefficientRadix : Int) ≤ value.toInt)
+    (hupper : value.toInt < alignedModulus modulus.toNat) :
+    let out := normalizeCoefficient value modulus
+    out.1 = value.low ∧ out.2.Bounded ∧
+      out.1.toNat + splitRadix * out.2.toNat =
+        (normalize modulus.toNat value.toInt).toNat ∧
+      out.2.toNat < 2 * modulus.toNat := by
+  have hlt : value.toInt < coefficientRadix :=
+    hupper.trans (by exact_mod_cast alignedModulus_lt_coefficientRadix hp)
+  have h := normalizeCoefficient_spec_of_lt_coefficientRadix value modulus hv hm hp hlower hlt
+  refine ⟨h.1, h.2.1, h.2.2.1, ?_⟩
+  have hnormalized := normalize_spec hp hlower hupper
+  have hnormalizedNat : (normalize modulus.toNat value.toInt).toNat <
+      alignedModulus modulus.toNat := by
+    rw [Int.toNat_lt hnormalized.1]
+    exact_mod_cast hnormalized.2.1
+  have hhighDiv := split_high_lt_two_mul_modulus hnormalizedNat
+  have hdivEq : (normalize modulus.toNat value.toInt).toNat / splitRadix =
+      (normalizeCoefficient value modulus).2.toNat := by
+    rw [← h.2.2.1, h.1, Nat.add_mul_div_left _ _ (by positivity),
+      Nat.div_eq_of_lt (low_lt_splitRadix value hv), zero_add]
+  rwa [hdivEq] at hhighDiv
 
 end PastaAsm.X86_64

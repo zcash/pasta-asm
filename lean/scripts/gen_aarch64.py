@@ -172,6 +172,13 @@ INVERT_DECLARATIONS = {
         *(D(name, "out", "_", "_") for name in
           ("sign", "excess", "m4", "m5", "m6", "m7", "tmp")),
     ),
+    "redc": (
+        *(D(f"r{i}", "inout", f"r{i}", f"r{i}") for i in range(4)),
+        *(D(f"h{i}", "in", f"high[{i}]", None) for i in range(4)),
+        *(D(f"p{i}", "in", f"modulus[{i}]", None) for i in range(4)),
+        D("inv", "in", "inv", None),
+        *(D(name, "out", "_", "_") for name in ("q", "r4", "t0", "t1", "t2", "t3")),
+    ),
     "reduce_once": (
         *(D(f"r{i}", "inout", f"value[{i}]", f"value[{i}]") for i in range(4)),
         *(D(f"p{i}", "in", f"modulus[{i}]", None) for i in range(4)),
@@ -255,6 +262,20 @@ INVERT_ROUTINES = (
         (("value", "WideLimbs"), ("modulus", "Limbs")), "CoefficientSplit",
         ("w4", "w5", "w6", "w7"),
         "The final signed coefficient adjustment; the low half is unchanged and the adjusted high half is returned.",
+    ),
+    InvertRoutineConfig(
+        "redc", "redcMont",
+        "fn redc(low: &Limbs, high: &Limbs, modulus: &Limbs, inv: u64) -> Limbs",
+        (("before asm", """
+            let (mut r0, mut r1, mut r2, mut r3) = (low[0], low[1], low[2], low[3]);
+            unsafe {
+        """), ("after asm", "; } [r0, r1, r2, r3]")),
+        (("low", "Limbs"), ("high", "Limbs"), ("modulus", "Limbs"), ("inv", "Nat")),
+        "Limbs", ("r0", "r1", "r2", "r3"),
+        "Semolina's full 512-bit Montgomery reduction: four low-half cancellation rounds, "
+        "addition of the high half, and one five-limb conditional subtraction.",
+        local_inputs=(("r0", "low.l0"), ("r1", "low.l1"),
+                      ("r2", "low.l2"), ("r3", "low.l3")),
     ),
     InvertRoutineConfig(
         "reduce_once", "reduceOnce",

@@ -4,20 +4,21 @@
 
 //! Constant-time inversion for the x86-64 backend.
 //!
-//! The assembly kernels below are register-renamed transcriptions of helpers
-//! from Semolina v0.1.4's `ct_inverse_mod_256-x86_64.pl`. The fixed-width
-//! coefficient arithmetic and Rust driver adapt the upstream routine rather
-//! than literally transcribing its complete instruction stream. The driver
+//! The divstep kernels below are register-renamed transcriptions of helpers
+//! from Semolina v0.1.4's `ct_inverse_mod_256-x86_64.pl`; REDC comes from
+//! `pasta_mulq-x86_64.pl`. The fixed-width coefficient arithmetic and Rust
+//! driver adapt the upstream routine rather than literally transcribing its
+//! complete instruction stream. The driver
 //! runs fifteen 31-iteration approximation batches and one final 47-iteration
 //! low-limb batch, for a fixed schedule of 512 iterations. Input-dependent
 //! choices use `CMOV` in assembly or wrapping mask arithmetic in Rust; every
 //! Rust loop has a public bound.
 //!
-//! Unlike upstream's memory-based helper interface, every block takes its limbs
-//! in registers and declares `nomem`. Rust supplies the operands and manages the
-//! intermediate arrays; LLVM may still emit loads or spills outside the blocks.
-//! No pointer is passed into the assembly, so these blocks do not assume a
-//! pointer width.
+//! Most blocks take their limbs in registers and declare `nomem`. The REDC block
+//! instead retains upstream's pointer-based read-only interface so its low-half
+//! reduction, high-half accumulation, and fifth carry stay in one instruction
+//! stream. That block therefore requires 64-bit pointers; Rust supplies all
+//! addresses, and LLVM may still emit loads or spills outside the blocks.
 //!
 //! Here `divstep` is local shorthand for one compare/swap/subtract/halve
 //! binary-GCD iteration in Semolina's `__inner_loop_*` helpers, not a claim
@@ -33,12 +34,11 @@ type Wide = [u64; 9];
 
 /// Inverts a canonical Montgomery residue for a Pasta modulus.
 ///
-/// The input is first taken out of Montgomery form. For nonzero input `x`,
-/// Semolina's coefficient is congruent to `x^-1 * R^2` modulo the modulus;
-/// Montgomery-reducing its 512-bit split yields the requested `x^-1 * R`.
-/// The normalized high half is below `R = 2^256`. Every Pasta modulus is
-/// greater than `R / 4`, so three conditional subtractions make the high half
-/// canonical before adding it to the reduced low half. Zero maps to zero.
+/// For nonzero Montgomery input `xR`, Semolina's normalized coefficient is
+/// congruent to `(xR)^-1 * R^2 = x^-1 * R` modulo the modulus. REDC converts
+/// the 512-bit coefficient to `x^-1`, potentially as a bounded lazy residue;
+/// multiplying by the canonical `R^2 mod p` then returns the requested
+/// canonical Montgomery residue `x^-1 * R`. Zero maps to zero.
 ///
 /// # Safety contract
 ///
@@ -46,11 +46,10 @@ type Wide = [u64; 9];
 /// equal `-modulus[0]^-1 mod 2^64`, as required by the public entry point.
 #[inline]
 pub(crate) fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    // The divstep relation is applied to the ordinary integer x. For nonzero x,
-    // starting from x rather than xR makes the selected coefficient congruent
-    // to x^-1 R^2 modulo p; REDC of its 512-bit split therefore produces the
-    // desired Montgomery residue x^-1 R. The zero input remains zero.
-    let mut a = crate::from_mont(value, modulus, inv);
+    // Apply the divstep relation directly to the canonical Montgomery input, as
+    // upstream does. The final multiplication by R^2 restores Montgomery form
+    // after REDC of the selected 512-bit coefficient.
+    let mut a = *value;
     let mut b = *modulus;
     let mut u: Wide = [1, 0, 0, 0, 0, 0, 0, 0, 0];
     let mut v: Wide = [0; 9];
@@ -70,29 +69,11 @@ pub(crate) fn invert(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
     // The final exact 47 divsteps only need the second coefficient row.
     let matrix = divsteps_47(a[0], b[0]);
     let coefficient = normalize(lincomb(&u, &v, matrix.f1, matrix.g1), modulus);
+    let redc = redc(&coefficient, modulus, inv);
 
-    let low = [
-        coefficient[0],
-        coefficient[1],
-        coefficient[2],
-        coefficient[3],
-    ];
-    let high = [
-        coefficient[4],
-        coefficient[5],
-        coefficient[6],
-        coefficient[7],
-    ];
-
-    // REDC(low + high*R) = from_mont(low) + high (mod p). Normalization returns
-    // high in four limbs, so high < R = 2^256. Both Pasta moduli are greater
-    // than R/4, hence high < 4*modulus. Three fixed conditional subtractions
-    // therefore make high canonical before the final addition.
-    let low = crate::from_mont(&low, modulus, inv);
-    let high = reduce_once(high, modulus);
-    let high = reduce_once(high, modulus);
-    let high = reduce_once(high, modulus);
-    super::add(&low, &high, modulus)
+    // REDC may return a lazy residue. The x86 multiplication accepts any lhs
+    // when its rhs is canonical; R^2 is canonical for both Pasta moduli.
+    super::mul(&redc, &crate::montgomery_r2(modulus), modulus, inv)
 }
 
 /// One transition matrix produced by a 31-iteration approximation batch.
@@ -524,7 +505,169 @@ fn normalize(mut value: [u64; 9], modulus: &Limbs) -> [u64; 8] {
     ]
 }
 
+/// Montgomery-reduces a 512-bit value with Semolina's specialized Pasta
+/// `redc_mont_pasta` and uncorrected `__mulq_by_1_mont_pasta` schedules.
+///
+/// The low-half helper performs four Montgomery cancellations without its
+/// `from_mont_pasta` correction. The upper half is then added with a fifth carry
+/// before one modulus subtraction. Including that carry in the final borrow
+/// test is essential: the returned four limbs are a bounded residue, but are
+/// not assumed to be canonical.
+#[inline(never)]
+fn redc(value: &[u64; 8], modulus: &Limbs, inv: u64) -> Limbs {
+    let (o0, o1, o2, o3): (u64, u64, u64, u64);
+
+    // SAFETY: this straight-line block reads exactly the eight limbs behind
+    // `value` and the four limbs behind `modulus`, both valid references. The
+    // pointers and all register inputs and outputs are declared; the block does
+    // not write memory or use the stack. Its instruction stream is a
+    // register-renamed inline transcription of the cited Semolina helpers.
+    unsafe {
+        asm!(
+            // Load the low half and initialize q = value[0] * inv.
+            "mov rax, qword ptr [{value}]",
+            "mov {a1}, qword ptr [{value} + 8]",
+            "mov {a2}, qword ptr [{value} + 16]",
+            "mov {a3}, qword ptr [{value} + 24]",
+            "mov {a4}, rax",
+            "imul rax, {inv}",
+            "mov {q}, rax",
+
+            // Uncorrected low-half Montgomery reduction, round 0.
+            "mul qword ptr [{p}]",
+            "add {a4}, rax",
+            "mov rax, {q}",
+            "adc {a4}, rdx",
+            "mul qword ptr [{p} + 8]",
+            "add {a1}, rax",
+            "mov rax, {q}",
+            "adc rdx, 0",
+            "xor {hi}, {hi}",
+            "add {a1}, {a4}",
+            "adc {a2}, rdx",
+            "adc {hi}, 0",
+            "mov {a5}, {a1}",
+            "imul {a1}, {inv}",
+            "mul qword ptr [{p} + 24]",
+            "add {a3}, rax",
+            "mov rax, {a1}",
+            "adc rdx, 0",
+            "add {a3}, {hi}",
+            "adc rdx, 0",
+            "mov {a4}, rdx",
+
+            // Round 1.
+            "mul qword ptr [{p}]",
+            "add {a5}, rax",
+            "mov rax, {a1}",
+            "adc {a5}, rdx",
+            "mul qword ptr [{p} + 8]",
+            "add {a2}, rax",
+            "mov rax, {a1}",
+            "adc rdx, 0",
+            "xor {hi}, {hi}",
+            "add {a2}, {a5}",
+            "adc {a3}, rdx",
+            "adc {hi}, 0",
+            "mov {a6}, {a2}",
+            "imul {a2}, {inv}",
+            "mul qword ptr [{p} + 24]",
+            "add {a4}, rax",
+            "mov rax, {a2}",
+            "adc rdx, 0",
+            "add {a4}, {hi}",
+            "adc rdx, 0",
+            "mov {a5}, rdx",
+
+            // Round 2.
+            "mul qword ptr [{p}]",
+            "add {a6}, rax",
+            "mov rax, {a2}",
+            "adc {a6}, rdx",
+            "mul qword ptr [{p} + 8]",
+            "add {a3}, rax",
+            "mov rax, {a2}",
+            "adc rdx, 0",
+            "xor {hi}, {hi}",
+            "add {a3}, {a6}",
+            "adc {a4}, rdx",
+            "adc {hi}, 0",
+            "mov {q}, {a3}",
+            "imul {a3}, {inv}",
+            "mul qword ptr [{p} + 24]",
+            "add {a5}, rax",
+            "mov rax, {a3}",
+            "adc rdx, 0",
+            "add {a5}, {hi}",
+            "adc rdx, 0",
+            "mov {a6}, rdx",
+
+            // Round 3.
+            "mul qword ptr [{p}]",
+            "add {q}, rax",
+            "mov rax, {a3}",
+            "adc {q}, rdx",
+            "mul qword ptr [{p} + 8]",
+            "add {a4}, rax",
+            "mov rax, {a3}",
+            "adc rdx, 0",
+            "xor {hi}, {hi}",
+            "add {a4}, {q}",
+            "adc {a5}, rdx",
+            "adc {hi}, 0",
+            "mul qword ptr [{p} + 24]",
+            "add {a6}, rax",
+            "mov rax, {a4}",
+            "adc rdx, 0",
+            "add {a6}, {hi}",
+            "adc rdx, 0",
+            "mov {q}, rdx",
+
+            // Add the upper half and retain its carry as a fifth limb.
+            "add {a4}, qword ptr [{value} + 32]",
+            "adc {a5}, qword ptr [{value} + 40]",
+            "mov rax, {a4}",
+            "adc {a6}, qword ptr [{value} + 48]",
+            "mov {a1}, {a5}",
+            "adc {q}, qword ptr [{value} + 56]",
+            "sbb {value}, {value}",
+
+            // Subtract the modulus as a five-limb value. If the accumulated
+            // fifth limb was one, this cannot underflow even when the low four
+            // limbs borrow, so the subtraction is selected.
+            "mov {a2}, {a6}",
+            "sub {a4}, qword ptr [{p}]",
+            "sbb {a5}, qword ptr [{p} + 8]",
+            "sbb {a6}, qword ptr [{p} + 16]",
+            "mov {a3}, {q}",
+            "sbb {q}, qword ptr [{p} + 24]",
+            "sbb {value}, 0",
+            "cmovnc rax, {a4}",
+            "cmovnc {a1}, {a5}",
+            "cmovnc {a2}, {a6}",
+            "cmovnc {a3}, {q}",
+            value = inout(reg) value.as_ptr() => _,
+            p = in(reg) modulus.as_ptr(),
+            inv = in(reg) inv,
+            a1 = out(reg) o1,
+            a2 = out(reg) o2,
+            a3 = out(reg) o3,
+            a4 = out(reg) _,
+            a5 = out(reg) _,
+            a6 = out(reg) _,
+            q = out(reg) _,
+            hi = out(reg) _,
+            out("rax") o0,
+            out("rdx") _,
+            options(pure, readonly, nostack),
+        );
+    }
+
+    [o0, o1, o2, o3]
+}
+
 /// Conditionally subtracts the modulus once.
+#[allow(dead_code)]
 #[inline(always)]
 fn reduce_once(mut value: Limbs, modulus: &Limbs) -> Limbs {
     let p0 = modulus[0];

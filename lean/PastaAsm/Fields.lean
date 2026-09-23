@@ -1,4 +1,5 @@
 /-
+Copyright Supranational LLC (the Pasta field constants from Semolina v0.1.4).
 Copyright (c) 2026 the pasta-asm contributors.
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
@@ -66,5 +67,21 @@ def vestaBase : PastaField where
 -- The limbs encode `q` as pasta_curves states it.
 example : vestaBase.modulus.toNat =
     0x40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001 := by decide
+
+/-- `(1 << 512) mod p` for the Pallas base field, from Semolina v0.1.4's
+Apache-2.0-licensed `src/consts.c`. -/
+def pallasR2 : Limbs :=
+  ⟨0x8c78ecb30000000f, 0xd7d30dbd8b0de0e7, 0x7797a99bc3c95d18, 0x096d41af7b9cb714⟩
+
+/-- `(1 << 512) mod p` for the Vesta base field, from the same source. -/
+def vestaR2 : Limbs :=
+  ⟨0xfc9678ff0000000f, 0x67bb433d891a16e3, 0x7fae231004ccf590, 0x096d41af7ccfdaa9⟩
+
+/-- Returns `R² mod modulus`, for `R = 2²⁵⁶` and either Pasta field modulus.
+
+The two supported moduli have different low limbs. Under the caller contract, a non-Pallas low
+limb therefore selects Vesta, exactly as the crate's `montgomery_r2` does. -/
+def montgomeryR2 (modulus : Limbs) : Limbs :=
+  if modulus.l0 = pallasBase.modulus.l0 then pallasR2 else vestaR2
 
 end PastaAsm

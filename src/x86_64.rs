@@ -40,12 +40,12 @@
 //! transcription of exactly that operand set makes the compiler refuse with
 //! "inline assembly requires more registers than available". The memory
 //! operands are also why `mul` and `square` — and the public routines
-//! composed from them — gate on 64-bit pointers: their blocks bind pointers
-//! to registers and use them as full-width addresses, which the x32 ABI's
-//! 32-bit pointers would break. `add`, `sub`, and `from_mont` are
-//! register-only and are available on every x86-64 target. The pointers reference the caller's own
-//! arrays: there is no packed parameter block to build and no spill stores,
-//! only loads that are expected to hit L1. The modulus and inverse travel as
+//! composed from them, including `invert` — gate on 64-bit pointers: their blocks
+//! bind pointers to registers and use them as full-width addresses, which the
+//! x32 ABI's 32-bit pointers would break. `add`, `sub`, and `from_mont` are
+//! register-only and are available on every x86-64 target. The pointers reference
+//! the caller's own arrays: there is no packed parameter block to build and no
+//! spill stores, only loads that are expected to hit L1. The modulus and inverse travel as
 //! separate arguments, as on AArch64: `inv` is bound to a register of its own
 //! (measured slightly faster than loading it through memory each round) and
 //! `modulus` is read through a pointer to the caller's array. `add` and `sub`
@@ -70,18 +70,20 @@
 //! addresses, and a CMOV-based final conditional subtraction, so the code is
 //! constant-time.
 //!
-//! ISA requirement: `mul` and `square` use MULX (BMI2) and ADCX/ADOX (ADX:
-//! Intel Broadwell / AMD Zen or newer). `from_mont` uses MULX (BMI2) alone.
-//! None of these are runtime-checked: code built where they are available
-//! uses the instructions unconditionally, and running it on an older CPU
-//! faults with an illegal instruction. `add` and `sub` use baseline x86-64
+//! ISA requirement: `mul`, `square`, and `invert` use MULX (BMI2) and
+//! ADCX/ADOX (ADX: Intel Broadwell / AMD Zen or newer). `from_mont` uses MULX
+//! (BMI2) alone. None of these are runtime-checked: code built where they are
+//! available uses the instructions unconditionally, and running it on an older
+//! CPU faults with an illegal instruction. `add` and `sub` use baseline x86-64
 //! instructions only.
 
 use core::arch::asm;
 
 use crate::{Limbs, is_canonical};
 
+#[cfg(target_pointer_width = "64")]
 mod invert;
+#[cfg(target_pointer_width = "64")]
 pub(super) use invert::invert;
 
 const PASTA_HIGH_LIMB: u64 = 1 << 62;

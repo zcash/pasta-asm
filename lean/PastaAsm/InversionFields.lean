@@ -375,6 +375,72 @@ theorem coprime_of_isCanonical {F : PastaField} (hF : IsInversionField F) (value
   hF.coprime_of_nonzero_of_lt hne
     ((isCanonical_iff value F.modulus hv F.bounded).mp hcanonical)
 
+/-- The crate's selected `R²` constant is a bounded, canonical right operand for Montgomery
+multiplication at either supported inversion field, and represents `R²` modulo that field. -/
+theorem montgomeryR2_spec {F : PastaField} (hF : IsInversionField F) :
+    (montgomeryR2 F.modulus).Bounded ∧
+      (montgomeryR2 F.modulus).toNat < F.modulus.toNat ∧
+      (montgomeryR2 F.modulus).l1 ≤ 2^64 - 3 ∧
+      (montgomeryR2 F.modulus).l2 ≤ 2^64 - 3 ∧
+      (montgomeryR2 F.modulus).l3 ≤ 2^64 - 3 ∧
+      (montgomeryR2 F.modulus).toNat ≡ R^2 [MOD F.modulus.toNat] := by
+  rcases hF with rfl | rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+    · unfold Limbs.Bounded montgomeryR2 pallasR2
+      decide +kernel
+    · decide +kernel
+    · decide +kernel
+    · decide +kernel
+    · decide +kernel
+    · unfold Nat.ModEq
+      decide +kernel
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+    · unfold Limbs.Bounded montgomeryR2 vestaR2
+      decide +kernel
+    · decide +kernel
+    · decide +kernel
+    · decide +kernel
+    · decide +kernel
+    · unfold Nat.ModEq
+      decide +kernel
+
+/-- The selected `R²` constant has four 64-bit limbs. -/
+theorem montgomeryR2_bounded {F : PastaField} (hF : IsInversionField F) :
+    (montgomeryR2 F.modulus).Bounded :=
+  hF.montgomeryR2_spec.1
+
+/-- The selected `R²` constant is canonical. -/
+theorem montgomeryR2_lt {F : PastaField} (hF : IsInversionField F) :
+    (montgomeryR2 F.modulus).toNat < F.modulus.toNat :=
+  hF.montgomeryR2_spec.2.1
+
+/-- The crate's Boolean canonicality check accepts the selected `R²` constant. -/
+theorem montgomeryR2_isCanonical {F : PastaField} (hF : IsInversionField F) :
+    isCanonical (montgomeryR2 F.modulus) F.modulus = true :=
+  (isCanonical_iff _ _ hF.montgomeryR2_bounded F.bounded).2 hF.montgomeryR2_lt
+
+/-- Limbs 1 to 3 of the selected `R²` constant satisfy the multiplication block's right-operand
+bounds. -/
+theorem montgomeryR2_limb_bounds {F : PastaField} (hF : IsInversionField F) :
+    (montgomeryR2 F.modulus).l1 ≤ 2^64 - 3 ∧
+      (montgomeryR2 F.modulus).l2 ≤ 2^64 - 3 ∧
+      (montgomeryR2 F.modulus).l3 ≤ 2^64 - 3 :=
+  ⟨hF.montgomeryR2_spec.2.2.1, hF.montgomeryR2_spec.2.2.2.1,
+    hF.montgomeryR2_spec.2.2.2.2.1⟩
+
+/-- The same limb bounds in the form consumed by `mulMont_spec_of_rhs_lt`. -/
+theorem montgomeryR2_mul_limb_bounds {F : PastaField} (hF : IsInversionField F) :
+    (montgomeryR2 F.modulus).l1 + 3 ≤ 2^64 ∧
+      (montgomeryR2 F.modulus).l2 + 3 ≤ 2^64 ∧
+      (montgomeryR2 F.modulus).l3 + 3 ≤ 2^64 := by
+  obtain ⟨h1, h2, h3⟩ := hF.montgomeryR2_limb_bounds
+  omega
+
+/-- The selected constant represents `R²` modulo the supported field modulus. -/
+theorem montgomeryR2_modEq {F : PastaField} (hF : IsInversionField F) :
+    (montgomeryR2 F.modulus).toNat ≡ R^2 [MOD F.modulus.toNat] :=
+  hF.montgomeryR2_spec.2.2.2.2.2
+
 end IsInversionField
 
 end PastaAsm

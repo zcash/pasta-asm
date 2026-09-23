@@ -63,6 +63,7 @@ BOUND_HYPS = {
     "t": "ht", "modulus": "hm", "lhs": "hlhs", "rhs": "hrhs",
     "value": "hv", "product": "hproduct", "acc": "hacc",
     "a": "ha", "b": "hb", "u": "hu", "v": "hv",
+    "low": "hlow", "high": "hhigh",
 }
 INV_BOUND_HYP = "hinv_lt"
 SKELETON_WIDTH = 100
@@ -696,6 +697,8 @@ SPEC_MANIFEST = {
     "lean/PastaAsm/AArch64/Spec/Mul.lean": ("AArch64", ("mulMont", "mulMontRound")),
     "lean/PastaAsm/AArch64/Spec/Square.lean": ("AArch64", ("sqrMont",)),
     "lean/PastaAsm/AArch64/Spec/Invert/Arithmetic.lean": ("AArch64", ("reduceOnce", "addWords")),
+    # Staged skeleton contract: final arithmetic annotation is still admitted.
+    "lean/PastaAsm/AArch64/Spec/Invert/Redc.lean": ("AArch64", ("redcMont",)),
     "lean/PastaAsm/AArch64/Spec/Invert/Divsteps/Round47.lean": ("AArch64", ("divsteps47Round",)),
     "lean/PastaAsm/AArch64/Spec/Invert/Divsteps/Round31.lean": ("AArch64", ("divsteps31Round",)),
     "lean/PastaAsm/AArch64/Spec/Invert/Divsteps/Steps47.lean": ("AArch64", ("divsteps47",)),
@@ -706,6 +709,8 @@ SPEC_MANIFEST = {
     "lean/PastaAsm/X86_64/Spec/Square.lean": ("X86_64", ("squareLo", "squareHi")),
     "lean/PastaAsm/X86_64/Spec/Invert/Arithmetic.lean": (
         "X86_64", ("addWordsLimb", "mulSignedLimb", "normalizeNegative", "reduceOnce")),
+    # Staged skeleton contract: final arithmetic annotation is still admitted.
+    "lean/PastaAsm/X86_64/Spec/Invert/Redc.lean": ("X86_64", ("redcMont",)),
     "lean/PastaAsm/X86_64/Spec/Invert/Adjustment.lean": (
         "X86_64", ("normalizeExcess", "updateAbShift")),
     "lean/PastaAsm/X86_64/Spec/Invert/Divsteps/Round31.lean": ("X86_64", ("divsteps31Round",)),

@@ -31,17 +31,16 @@ and [x86-64](https://github.com/supranational/semolina/blob/v0.1.4/src/elf/ct_in
 instruction streams. The Montgomery wrapper is adapted from
 [`recip.c`](https://github.com/supranational/semolina/blob/v0.1.4/src/recip.c).
 
-The ports retain the approximation, binary-GCD inner-loop, and final-correction
-kernels and the fixed 15 × 31 + 47 iteration schedule. They adapt coefficient updates
-to fixed-width signed arithmetic instead of upstream's width-specialized helpers,
-replace memory-based helper interfaces with register operands, and use a Rust driver.
-Every inversion assembly block declares `nomem`; compiler-generated loads and spills
-outside the blocks remain possible. Converting the input out of Montgomery form first
-and using a split reduction afterward avoids upstream's final multiplication by `R^2`.
-There is no global assembly or external assembler. Inversion returns a canonical Montgomery
-residue and maps zero to zero. This new port is not covered by the existing Lean
-proofs. The independent inversion tests run on native x86-64; AArch64 has been
-cross-built but still needs runtime validation on AArch64 hardware.
+The ports retain the approximation, binary-GCD inner-loop, final-correction kernels,
+and the fixed 15 × 31 + 47 iteration schedule. They adapt coefficient updates to
+fixed-width signed arithmetic instead of upstream's width-specialized helpers, replace
+memory-based helper interfaces with register operands, and use a Rust driver. Every
+inversion assembly block declares `nomem`; compiler-generated loads and spills outside
+the blocks remain possible. The Montgomery wrapper uses the ordinary multiplication
+backend with Semolina's field-specific `R^2` constants from
+[`src/consts.c`](https://github.com/supranational/semolina/blob/v0.1.4/src/consts.c).
+There is no global assembly or external assembler. Inversion returns a canonical
+Montgomery residue and maps zero to zero.
 
 ## Usage
 
@@ -49,10 +48,10 @@ The crate provides all operations on `target_arch = "aarch64"`. On
 `target_arch = "x86_64"`, availability is operation-specific:
 
 - `add` and `sub` use baseline x86-64 instructions and register-only operands.
-- `from_mont` and `invert` also use register-only assembly, but require BMI2 (MULX).
-  They do not require ADX or 64-bit pointers.
-- `mul`, `square`, and `sqr_n_mul` use pointer-based assembly operands and require
-  64-bit pointers, BMI2, and ADX (MULX and ADCX/ADOX: Intel Broadwell / AMD Zen or newer).
+- `from_mont` also uses register-only assembly, but requires BMI2 (MULX).
+- `mul`, `square`, `sqr_n_mul`, and `invert` use pointer-based multiplication and
+  require 64-bit pointers, BMI2, and ADX (MULX and ADCX/ADOX: Intel Broadwell /
+  AMD Zen or newer).
 
 CPU features are not checked at runtime. On other architectures this crate is empty;
 consumers must gate each operation appropriately and fall back to portable arithmetic.
@@ -67,19 +66,19 @@ each entry point.
 
 ## Testing
 
-On AArch64 and x86-64 (with 64-bit pointers if relevant), `cargo test` runs known-answer tests
-of the entry points for both fields; on other targets there is nothing to test. `pasta_curves`
-tests the backend against its portable arithmetic when its `asm` feature is enabled.
-`scripts/ci.sh` runs every check CI runs.
+On AArch64 and x86-64, `cargo test` runs known-answer tests of the available entry
+points for both fields; inversion and the multiplication-based operations require 64-bit
+pointers on x86-64. On other targets there is nothing to test. `pasta_curves` tests the
+backend against its portable arithmetic when its `asm` feature is enabled. `scripts/ci.sh`
+runs every check CI runs.
 
 ## Formal verification
 
-`lean/` holds a Lean 4 development that models the routines formally and contributes to assuring
-their correctness. The model is at the instruction level. Individual blocks of assembly are
-proven; from those, each of the six entry points is proved at either Pasta field, under the
-condition that the entry point asserts. The transcription is generated from the crate's own
-inline blocks, CI regenerates and diffs it, and the independent `nanoda` implementation of the
-Lean kernel re-checks the build. See [`lean/README.md`](lean/README.md).
+`lean/` holds a Lean 4 development that models the routines at the instruction level.
+The transcription is generated from the crate's own inline blocks, CI regenerates and
+diffs it, and the independent `nanoda` implementation of the Lean kernel re-checks the
+build. See [`lean/README.md`](lean/README.md) for the implemented verification coverage,
+trust story, and caveats.
 
 ## License
 

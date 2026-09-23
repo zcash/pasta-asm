@@ -42,15 +42,16 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
         return (gen_aarch64.emit_loop_invert(source, config) if config.loop_count
                 else [gen_aarch64.emit_straight_invert(source, config)])
 
-    def test_all_seven_source_blocks_and_two_round_helpers_are_registered(self):
+    def test_all_eight_source_blocks_and_two_round_helpers_are_registered(self):
         names = [routine.name for routine in gen_aarch64.all_routines()]
         self.assertEqual(names[5:], [
             "divsteps31Round", "divsteps31", "updateAB", "addWords", "mulSigned",
-            "divsteps47Round", "divsteps47", "normalizeCoefficient", "reduceOnce",
+            "divsteps47Round", "divsteps47", "normalizeCoefficient", "redcMont",
+            "reduceOnce",
         ])
         self.assertEqual([config.rust_name for config in gen_aarch64.INVERT_ROUTINES], [
             "divsteps_31", "update_ab", "add_words", "mul_signed", "divsteps_47",
-            "normalize_coefficient", "reduce_once",
+            "normalize_coefficient", "redc", "reduce_once",
         ])
 
     def test_composition_facing_signatures_and_shared_bitpattern_types(self):
@@ -67,6 +68,7 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
                 "def normalizeCoefficient (value : WideLimbs) (modulus : Limbs) : "
                 "CoefficientSplit :="
             ),
+            "redcMont": "def redcMont (low high modulus : Limbs) (inv : Nat) : Limbs :=",
             "reduceOnce": "def reduceOnce (value modulus : Limbs) : Limbs :=",
         }
         self.assertEqual({name: routines[name].signature for name in expected}, expected)
@@ -81,6 +83,38 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
                 block = gen_aarch64.parse_invert_helper(self.source, config)
                 self.assertGreater(len(block.instructions), 0)
                 self.assertEqual(block.options, {"pure", "nomem", "nostack"})
+
+    def test_redc_registers_all_74_upstream_instructions_and_critical_epilogue(self):
+        block = gen_aarch64.parse_invert_helper(self.source, self.configs["redc"])
+        self.assertEqual(len(block.instructions), 74)
+        self.assertEqual(block.instructions[-9:], (
+            "subs {t0}, {r0}, {p0}",
+            "sbcs {t1}, {r1}, {p1}",
+            "sbcs {t2}, {r2}, {p2}",
+            "sbcs {t3}, {r3}, {p3}",
+            "sbcs xzr, {r4}, xzr",
+            "csel {r0}, {r0}, {t0}, lo",
+            "csel {r1}, {r1}, {t1}, lo",
+            "csel {r2}, {r2}, {t2}, lo",
+            "csel {r3}, {r3}, {t3}, lo",
+        ))
+        routine = self.emit("redc")[0]
+        self.assertEqual(routine.signature,
+                         "def redcMont (low high modulus : Limbs) (inv : Nat) : Limbs :=")
+        self.assertEqual(routine.result, "  ⟨r0, r1, r2, r3⟩")
+        argument_bindings = {
+            entry["name"]: entry["expr"] for entry in routine.emitter.entries
+            if entry["pc"] is None
+        }
+        self.assertEqual(argument_bindings, {
+            **{f"r{i}": f"low.l{i}" for i in range(4)},
+            **{f"h{i}": f"high.l{i}" for i in range(4)},
+            **{f"p{i}": f"modulus.l{i}" for i in range(4)},
+            "inv": "inv",
+        })
+        generated_pcs = {entry["pc"] for entry in routine.emitter.entries
+                         if entry["pc"] is not None}
+        self.assertEqual(generated_pcs, set(range(74)))
 
     def test_fixed_loops_are_factored_from_one_source_body_and_called_exactly(self):
         for rust_name, count in (("divsteps_31", 31), ("divsteps_47", 47)):
@@ -172,6 +206,9 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
             ("add_words", "r0 = in(reg) rhs[0],", "r0 = in(reg) lhs[0],"),
             ("normalize_coefficient", "w4 = inout(reg) value[4] => w4,",
              "w4 = inout(reg) value[5] => w4,"),
+            ("redc", "h0 = in(reg) high[0],", "h0 = in(reg) low[0],"),
+            ("redc", "p2 = in(reg) modulus[2],", "p2 = in(reg) modulus[3],"),
+            ("redc", "inv = in(reg) inv,", "inv = in(reg) modulus[0],"),
         )
         for name, old, new in mutations:
             with self.subTest(helper=name):
@@ -189,6 +226,18 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(asm_source.GenerationError, "Rust region 'before asm'"):
             self.emit("normalize_coefficient", source)
+        source = self.mutate_function(
+            "redc",
+            "let (mut r0, mut r1, mut r2, mut r3) = (low[0], low[1], low[2], low[3]);",
+            "let (mut r0, mut r1, mut r2, mut r3) = (low[1], low[0], low[2], low[3]);",
+        )
+        with self.assertRaisesRegex(asm_source.GenerationError, "Rust region 'before asm'"):
+            self.emit("redc", source)
+        source = self.mutate_function(
+            "redc", "[r0, r1, r2, r3]", "[r1, r0, r2, r3]"
+        )
+        with self.assertRaisesRegex(asm_source.GenerationError, "Rust region 'after asm'"):
+            self.emit("redc", source)
 
     def test_uninitialized_read_and_input_only_write_are_rejected(self):
         source = self.mutate_function(
@@ -245,7 +294,7 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
         self.assertIn(gen_aarch64.OUT_VECTORS, outputs)
         self.assertIn(gen_aarch64.OUT_INVERT_VECTORS, outputs)
         for name in ("divsteps31", "updateAB", "addWords", "mulSigned", "divsteps47",
-                     "normalizeCoefficient", "reduceOnce"):
+                     "normalizeCoefficient", "redcMont", "reduceOnce"):
             self.assertIn(f"def {name} ", outputs[gen_aarch64.OUT_PROGRAM])
 
 

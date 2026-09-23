@@ -601,7 +601,8 @@ class SharedGeneratorTests(unittest.TestCase):
             [routine.name for routine in routines],
             ["addMod", "subMod", "mulMontRound", "mulMont", "squareLo", "squareHi", "fromMont",
              "divsteps31Round", "divsteps31", "updateAbShift", "addWordsLimb", "mulSignedLimb",
-             "normalizeNegative", "normalizeExcess", "reduceOnce", "divsteps47Round", "divsteps47"],
+             "normalizeNegative", "normalizeExcess", "reduceOnce", "divsteps47Round", "divsteps47",
+             "redcMont"],
         )
         for routine in routines:
             with self.subTest(routine=routine.name):

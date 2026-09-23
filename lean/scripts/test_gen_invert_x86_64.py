@@ -24,15 +24,15 @@ class InvertParserTests(unittest.TestCase):
         self.assertEqual(self.source.count(old), 1, old)
         return self.source.replace(old, new)
 
-    def test_all_eight_asm_blocks_use_shared_helper_parser(self):
+    def test_all_nine_asm_blocks_use_shared_helper_parser(self):
         parsed = [
             gen_x86_64.parse_invert_helper(self.source, config)
             for config in gen_x86_64.INVERT_ROUTINES
         ]
-        self.assertEqual(sum(len(helper.blocks) for helper in parsed), 8)
+        self.assertEqual(sum(len(helper.blocks) for helper in parsed), 9)
         self.assertEqual(
             [len(block.instructions) for helper in parsed for block in helper.blocks],
-            [68, 16, 4, 7, 29, 11, 23, 12],
+            [68, 16, 4, 7, 29, 11, 23, 12, 107],
         )
         normalize = next(
             helper for config, helper in zip(gen_x86_64.INVERT_ROUTINES, parsed)
@@ -82,6 +82,42 @@ class InvertParserTests(unittest.TestCase):
         with self.assertRaisesRegex(gen_x86_64.GenerationError,
                                     "declaration 6 does not match expected"):
             gen_x86_64.parse_invert_helper(source, config)
+
+    def test_redc_non_asm_rust_mutation_is_rejected(self):
+        source = self.mutate(
+            "let (o0, o1, o2, o3): (u64, u64, u64, u64);",
+            "let (o0, o1, o2, o3): (u64, u64, u64, usize);",
+        )
+        config = next(c for c in gen_x86_64.INVERT_ROUTINES if c.rust_name == "redc")
+        with self.assertRaisesRegex(gen_x86_64.GenerationError, "Rust region 'inputs'"):
+            gen_x86_64.parse_invert_helper(source, config)
+
+    def test_redc_rewired_pointer_declaration_is_rejected(self):
+        source = self.mutate(
+            "p = in(reg) modulus.as_ptr(),",
+            "p = in(reg) value.as_ptr(),",
+        )
+        config = next(c for c in gen_x86_64.INVERT_ROUTINES if c.rust_name == "redc")
+        with self.assertRaisesRegex(gen_x86_64.GenerationError,
+                                    "declaration 1 does not match expected"):
+            gen_x86_64.parse_invert_helper(source, config)
+
+    def test_redc_requires_exact_readonly_options(self):
+        source = self.mutate(
+            "options(pure, readonly, nostack),",
+            "options(pure, nomem, nostack),",
+        )
+        config = next(c for c in gen_x86_64.INVERT_ROUTINES if c.rust_name == "redc")
+        with self.assertRaisesRegex(gen_x86_64.GenerationError, "requires options|options do not match"):
+            gen_x86_64.parse_invert_helper(source, config)
+
+    def test_redc_rejects_memory_past_eight_limb_product(self):
+        source = self.mutate(
+            '"adc {q}, qword ptr [{value} + 56]",',
+            '"adc {q}, qword ptr [{value} + 64]",',
+        )
+        with self.assertRaisesRegex(gen_x86_64.GenerationError, "unsupported memory offset 64"):
+            gen_x86_64.all_invert_routines(source)
 
 
 class FixedLoopTests(unittest.TestCase):
@@ -221,16 +257,17 @@ class InvertGenerationTests(unittest.TestCase):
             [
                 "divsteps31Round", "divsteps31", "updateAbShift", "addWordsLimb",
                 "mulSignedLimb", "normalizeNegative", "normalizeExcess", "reduceOnce",
-                "divsteps47Round", "divsteps47",
+                "divsteps47Round", "divsteps47", "redcMont",
             ],
         )
 
-    def test_nine_limb_type_is_fully_qualified(self):
+    def test_wide_limb_types_are_unambiguous(self):
         signatures = [routine.signature for routine in self.routines]
-        wide = [signature for signature in signatures if "WideLimbs" in signature]
-        self.assertEqual(len(wide), 2)
-        self.assertTrue(all("PastaAsm.WideLimbs" in signature for signature in wide))
-        self.assertNotIn("(value : WideLimbs)", "\n".join(wide))
+        coefficient_wide = [signature for signature in signatures if "PastaAsm.WideLimbs" in signature]
+        self.assertEqual(len(coefficient_wide), 2)
+        self.assertNotIn("(value : WideLimbs)", "\n".join(coefficient_wide))
+        redc = next(routine for routine in self.routines if routine.name == "redcMont")
+        self.assertIn("(product : WideLimbs)", redc.signature)
 
     def test_every_semantic_source_instruction_has_one_comment(self):
         comments = Counter(re.findall(r"-- (.+)$", self.generated, re.MULTILINE))
@@ -254,6 +291,16 @@ class InvertGenerationTests(unittest.TestCase):
             ["addMod", "subMod", "mulMontRound", "mulMont", "squareLo", "squareHi", "fromMont"],
         )
         self.assertEqual(names[7:], [routine.name for routine in self.routines])
+
+    def test_redc_uses_all_eight_product_limbs_and_generates_a_skeleton(self):
+        routine = next(routine for routine in self.routines if routine.name == "redcMont")
+        generated = routine.text(gen_x86_64.comment_column([routine]))
+        for index in range(8):
+            self.assertIn(f"product.l{index}", generated)
+        self.assertTrue(generated.rstrip().endswith("⟨rax, a1, a2, a3⟩"))
+        skeleton = "\n".join(gen.skeleton(routine))
+        self.assertIn("generated skeleton for `redcMont`", skeleton)
+        self.assertIn("hproduct.2.2.2.2.2.2.2 b_cf_50", skeleton)
 
     def test_update_ab_row_correction_preserves_rust_operation_order(self):
         routine = next(routine for routine in self.routines if routine.name == "updateAbShift")
