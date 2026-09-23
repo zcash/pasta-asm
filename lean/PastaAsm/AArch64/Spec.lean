@@ -9,6 +9,7 @@ import PastaAsm.AArch64.Spec.Invert.Arithmetic
 import PastaAsm.AArch64.Spec.Invert.Divsteps.Round47
 import PastaAsm.AArch64.Spec.Invert.Divsteps.Round31
 import PastaAsm.AArch64.Spec.Invert.Divsteps.Steps47
+import PastaAsm.AArch64.Spec.Invert.Divsteps.Steps31
 import PastaAsm.AArch64.Spec.Invert.Divsteps.Approximation
 import PastaAsm.AArch64.Spec.Sub
 import PastaAsm.AArch64.Spec.Mul

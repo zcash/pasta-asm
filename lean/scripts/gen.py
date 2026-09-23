@@ -728,6 +728,7 @@ SPEC_MANIFEST = {
     "lean/PastaAsm/AArch64/Spec/Invert/Divsteps/Round47.lean": ("AArch64", ("divsteps47Round",)),
     "lean/PastaAsm/AArch64/Spec/Invert/Divsteps/Round31.lean": ("AArch64", ("divsteps31Round",)),
     "lean/PastaAsm/AArch64/Spec/Invert/Divsteps/Steps47.lean": ("AArch64", ("divsteps47",)),
+    "lean/PastaAsm/AArch64/Spec/Invert/Divsteps/Steps31.lean": ("AArch64", ("divsteps31",)),
     "lean/PastaAsm/X86_64/Spec/Add.lean": ("X86_64", ("addMod",)),
     "lean/PastaAsm/X86_64/Spec/Sub.lean": ("X86_64", ("subMod",)),
     "lean/PastaAsm/X86_64/Spec/FromMont.lean": ("X86_64", ("fromMont",)),
@@ -745,7 +746,7 @@ SPEC_MANIFEST = {
 # Missing proofs are tracked by routine, not by hypothetical files.
 UNPROVED_ROUTINES = {
     "AArch64": (
-        "divsteps31", "updateAB", "mulSigned", "normalizeCoefficient",
+        "updateAB", "mulSigned", "normalizeCoefficient",
     ),
 }
 
