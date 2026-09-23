@@ -3,6 +3,7 @@ Copyright (c) 2026 the pasta-asm contributors.
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
 import PastaAsm.Spec.Invert.Arithmetic
+import Mathlib.Data.Nat.ModEq
 import Mathlib.Tactic.NormNum
 import Mathlib.Tactic.Ring
 
@@ -20,7 +21,8 @@ the stronger positive bound needed by normalization: for a Pasta-sized `p`,
 `2 * p * 2^256` is strictly smaller than `2^512`.
 -/
 
-namespace PastaAsm.Spec.Invert.Normalize
+namespace PastaAsm.Spec
+namespace Invert.Normalize
 
 /-- Radix separating the low and high four-word halves. -/
 abbrev splitRadix : Nat := 2^256
@@ -202,6 +204,99 @@ theorem normalize_spec {p : Nat} {c : Int}
       signedExcess, if_pos hcW]
     refine ⟨by omega, by omega, ⟨0, by ring⟩⟩
 
+/-- Exact arithmetic specification on the schedule's complete signed range.
+The normalizer selects a nonnegative eight-word representative, but unlike
+`normalize_spec` it does not necessarily select one below the aligned doubled
+modulus.  The positive endpoint `coefficientRadix` is reduced once, while
+smaller nonnegative inputs are unchanged; negative inputs receive one or two
+aligned moduli.
+
+The multiplier records that the field residue and low `2^256` bits are
+preserved. -/
+theorem normalize_schedule_spec {p : Nat} {c : Int}
+    (hp : PastaSizedOdd p)
+    (hlower : -(coefficientRadix : Int) ≤ c)
+    (hupper : c ≤ coefficientRadix) :
+    0 ≤ normalize p c ∧ normalize p c < coefficientRadix ∧
+      ∃ k : Int, normalize p c = c + k * alignedModulus p := by
+  have hMpos : (0 : Int) < alignedModulus p := by
+    exact_mod_cast alignedModulus_pos hp
+  have hMlt : (alignedModulus p : Int) < coefficientRadix := by
+    exact_mod_cast alignedModulus_lt_coefficientRadix hp
+  have hcoverNat := coefficientRadix_le_two_alignedModulus hp
+  have hcover : (coefficientRadix : Int) ≤ 2 * alignedModulus p := by
+    exact_mod_cast hcoverNat
+  by_cases hc : c < 0
+  · have hfirstUpper : c + alignedModulus p < coefficientRadix := by omega
+    by_cases hnegative : c + alignedModulus p < 0
+    · simp only [normalize, firstAdjustment, if_pos hc, secondAdjustment,
+        signedExcess, if_pos hnegative]
+      refine ⟨by omega, by omega, ⟨2, by ring⟩⟩
+    · simp only [normalize, firstAdjustment, if_pos hc, secondAdjustment,
+        signedExcess, if_neg hnegative, if_pos hfirstUpper]
+      refine ⟨by omega, by omega, ⟨1, by ring⟩⟩
+  · have hc0 : 0 ≤ c := by omega
+    by_cases hcW : c < coefficientRadix
+    · simp only [normalize, firstAdjustment, if_neg hc, secondAdjustment,
+        signedExcess, if_pos hcW]
+      refine ⟨by omega, by omega, ⟨0, by ring⟩⟩
+    · have hcEq : c = coefficientRadix := by omega
+      simp only [normalize, firstAdjustment, if_neg hc, secondAdjustment,
+        signedExcess, if_neg hcW]
+      refine ⟨by omega, by omega, ⟨-1, by ring⟩⟩
+
+/-- On the complete schedule range, normalization preserves the coefficient
+modulo the field modulus. -/
+theorem normalize_schedule_sub_dvd_modulus {p : Nat} {c : Int}
+    (hp : PastaSizedOdd p)
+    (hlower : -(coefficientRadix : Int) ≤ c)
+    (hupper : c ≤ coefficientRadix) :
+    (p : Int) ∣ normalize p c - c := by
+  obtain ⟨_, _, k, hk⟩ := normalize_schedule_spec hp hlower hupper
+  refine ⟨k * (2 * splitRadix), ?_⟩
+  rw [hk]
+  unfold alignedModulus
+  push_cast
+  ring
+
+/-- On the complete schedule range, normalization preserves the coefficient's
+integer remainder modulo the field modulus. -/
+theorem normalize_schedule_emod_modulus_eq {p : Nat} {c : Int}
+    (hp : PastaSizedOdd p)
+    (hlower : -(coefficientRadix : Int) ≤ c)
+    (hupper : c ≤ coefficientRadix) :
+    normalize p c % p = c % p := by
+  apply Int.emod_eq_emod_iff_emod_sub_eq_zero.mpr
+  obtain ⟨k, hk⟩ := normalize_schedule_sub_dvd_modulus hp hlower hupper
+  rw [hk]
+  simp
+
+/-- On the complete schedule range, the adjustments leave the low 256 bits
+unchanged. -/
+theorem normalize_schedule_sub_dvd_splitRadix {p : Nat} {c : Int}
+    (hp : PastaSizedOdd p)
+    (hlower : -(coefficientRadix : Int) ≤ c)
+    (hupper : c ≤ coefficientRadix) :
+    (splitRadix : Int) ∣ normalize p c - c := by
+  obtain ⟨_, _, k, hk⟩ := normalize_schedule_spec hp hlower hupper
+  refine ⟨k * (2 * p), ?_⟩
+  rw [hk]
+  unfold alignedModulus
+  push_cast
+  ring
+
+/-- Remainder equality states directly that normalization on the complete
+schedule range leaves the low 256 bits unchanged. -/
+theorem normalize_schedule_emod_splitRadix_eq {p : Nat} {c : Int}
+    (hp : PastaSizedOdd p)
+    (hlower : -(coefficientRadix : Int) ≤ c)
+    (hupper : c ≤ coefficientRadix) :
+    normalize p c % splitRadix = c % splitRadix := by
+  apply Int.emod_eq_emod_iff_emod_sub_eq_zero.mpr
+  obtain ⟨k, hk⟩ := normalize_schedule_sub_dvd_splitRadix hp hlower hupper
+  rw [hk]
+  simp
+
 /-- Successful normalization preserves the coefficient modulo the field
 modulus. -/
 theorem normalize_sub_dvd_modulus {p : Nat} {c : Int}
@@ -253,6 +348,30 @@ theorem normalize_emod_splitRadix_eq {p : Nat} {c : Int}
   rw [hk]
   simp
 
+/-- Splitting any eight-word representative at bit 256 produces a high half
+strictly below the four-word radix. -/
+theorem split_high_lt_splitRadix {normalized : Nat}
+    (hnormalized : normalized < coefficientRadix) :
+    normalized / splitRadix < splitRadix := by
+  apply Nat.div_lt_of_lt_mul
+  calc
+    normalized < coefficientRadix := hnormalized
+    _ = splitRadix * splitRadix := by
+      change 2^512 = 2^256 * 2^256
+      rw [show 512 = 256 + 256 by omega, pow_add]
+
+/-- On the complete schedule range, the high half of the normalized
+representative fits in four words. -/
+theorem normalize_schedule_high_lt_splitRadix {p : Nat} {c : Int}
+    (hp : PastaSizedOdd p)
+    (hlower : -(coefficientRadix : Int) ≤ c)
+    (hupper : c ≤ coefficientRadix) :
+    (normalize p c).toNat / splitRadix < splitRadix := by
+  obtain ⟨hnonneg, hlt, _⟩ := normalize_schedule_spec hp hlower hupper
+  apply split_high_lt_splitRadix
+  rw [Int.toNat_lt hnonneg]
+  exact hlt
+
 /-- Splitting any selected representative at bit 256 produces a high half
 strictly below `2p`, justifying the following single conditional subtraction. -/
 theorem split_high_lt_two_mul_modulus {p normalized : Nat}
@@ -280,4 +399,119 @@ theorem schedule_bound_insufficient {p : Nat} (hp : PastaSizedOdd p) :
       signedExcess, if_pos hMltInt]
     ring
 
-end PastaAsm.Spec.Invert.Normalize
+end Invert.Normalize
+
+/-!
+# Shared arithmetic for full-width Montgomery reduction
+
+The inversion backends use different instruction schedules for reducing a
+512-bit coefficient, but their final arithmetic is the same.  Four Montgomery
+cancellation rounds produce a low-half quotient `y`; the original high half is
+then added to `y`, including the carry above the four-word radix.  A single
+subtraction of `p` is selected by comparing this full candidate with `p`.
+
+The selected result is a bounded four-word value, but is intentionally not
+claimed to be canonical.  The following multiplication by canonical `R²`
+performs the final canonical reduction.
+-/
+namespace REDC
+
+/-- The shared mathematical effect of the carry-aware final subtraction.
+The comparison is against the full candidate, before truncation at `R`. -/
+def carryCorrect (candidate p : Nat) : Nat :=
+  if candidate < p then candidate else candidate - p
+
+/-- A full candidate below `R + p` becomes a bounded `R`-word value after the
+carry-aware subtraction, while retaining the same residue modulo `p`.
+
+There is deliberately no conclusion that the result is below `p`: when the
+candidate is at least `R`, subtracting `p` need not produce a canonical
+representative. -/
+theorem carryCorrect_spec {R p candidate : Nat}
+    (hpR : p < R) (hcandidate : candidate < R + p) :
+    carryCorrect candidate p < R ∧
+      carryCorrect candidate p ≡ candidate [MOD p] := by
+  unfold carryCorrect
+  by_cases hlt : candidate < p
+  · rw [if_pos hlt]
+    exact ⟨hlt.trans hpR, Nat.ModEq.rfl⟩
+  · rw [if_neg hlt]
+    have hple : p ≤ candidate := by omega
+    refine ⟨by omega, ?_⟩
+    unfold Nat.ModEq
+    rw [← Nat.add_mul_mod_self_right (candidate - p) 1 p]
+    simp only [one_mul, Nat.sub_add_cancel hple]
+
+/-- The high half of a value `T = lo + R * hi < R²` is below `R`, so adding a
+low-half reduction bounded by `p` gives a candidate below `R + p`. -/
+theorem full512_candidate_lt {R p T lo hi y : Nat}
+    (hp : 0 < p) (hpR : p < R)
+    (hT : T = lo + R * hi) (hTlt : T < R * R) (hy : y ≤ p) :
+    hi + y < R + p := by
+  have hRpos : 0 < R := hp.trans hpR
+  have hRhi : R * hi < R * R := by
+    calc
+      R * hi ≤ lo + R * hi := Nat.le_add_left _ _
+      _ = T := hT.symm
+      _ < R * R := hTlt
+  have hhi : hi < R := (Nat.mul_lt_mul_left hRpos).mp hRhi
+  omega
+
+/-- Shared full-width REDC arithmetic.  If `T` is split at radix `R`, and the
+low-half Montgomery cancellation satisfies `y * R = lo + m * p`, then the
+carry-aware correction of `hi + y` is bounded by `R` and represents `T / R`
+modulo `p`.
+
+The bounds `m < R` and `y ≤ p` are the natural contracts exposed by the four
+cancellation rounds.  The result is only a lazy residue below `R`, not
+necessarily a canonical residue below `p`. -/
+theorem full512_spec {R p T lo hi m y : Nat}
+    (hp : 0 < p) (hpR : p < R)
+    (hT : T = lo + R * hi) (hTlt : T < R * R)
+    (hcancellation : y * R = lo + m * p) (_hm : m < R) (hy : y ≤ p) :
+    carryCorrect (hi + y) p < R ∧
+      R * carryCorrect (hi + y) p ≡ T [MOD p] := by
+  have hcandidate := full512_candidate_lt hp hpR hT hTlt hy
+  obtain ⟨hbound, hcorrect⟩ := carryCorrect_spec hpR hcandidate
+  refine ⟨hbound, (Nat.ModEq.mul_left R hcorrect).trans ?_⟩
+  have heq : R * (hi + y) = T + m * p := by
+    calc
+      R * (hi + y) = R * hi + y * R := by ring
+      _ = R * hi + (lo + m * p) := by rw [hcancellation]
+      _ = (lo + R * hi) + m * p := by ring
+      _ = T + m * p := by rw [hT]
+  unfold Nat.ModEq
+  rw [heq, Nat.add_mul_mod_self_right]
+
+/-- Multiplication by a representative of `R²` removes the Montgomery factor
+from a REDC result.  Cancellation of `R` is explicit: it requires `R` to be
+coprime to `p`, as it is for a power of two and either odd Pasta modulus. -/
+theorem final_mul_rr_modEq {R p T reduced rr out : Nat}
+    (hcoprime : R.Coprime p)
+    (hreduced : R * reduced ≡ T [MOD p])
+    (hrr : rr ≡ R^2 [MOD p])
+    (hmul : R * out ≡ reduced * rr [MOD p]) :
+    out ≡ T [MOD p] := by
+  have hscaled : R * out ≡ R * T [MOD p] := by
+    calc
+      R * out ≡ reduced * rr [MOD p] := hmul
+      _ ≡ reduced * R^2 [MOD p] := Nat.ModEq.mul_left reduced hrr
+      _ = R * (R * reduced) := by ring
+      _ ≡ R * T [MOD p] := Nat.ModEq.mul_left R hreduced
+  exact Nat.ModEq.cancel_left_of_coprime hcoprime.symm.gcd_eq_one hscaled
+
+/-- Convenience composition of full-width REDC with the final canonical
+multiplication by `R²`.  The multiplication block supplies `out < p`; this
+lemma supplies the resulting residue `out ≡ T (mod p)`. -/
+theorem full512_final_mul_rr_spec {R p T lo hi m y rr out : Nat}
+    (hp : 0 < p) (hpR : p < R) (hcoprime : R.Coprime p)
+    (hT : T = lo + R * hi) (hTlt : T < R * R)
+    (hcancellation : y * R = lo + m * p) (hm : m < R) (hy : y ≤ p)
+    (hrr : rr ≡ R^2 [MOD p]) (hout : out < p)
+    (hmul : R * out ≡ carryCorrect (hi + y) p * rr [MOD p]) :
+    out < p ∧ out ≡ T [MOD p] := by
+  obtain ⟨_, hreduced⟩ := full512_spec hp hpR hT hTlt hcancellation hm hy
+  exact ⟨hout, final_mul_rr_modEq hcoprime hreduced hrr hmul⟩
+
+end REDC
+end PastaAsm.Spec
