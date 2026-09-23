@@ -264,9 +264,9 @@ theorems above. `from_mont` checks nothing and holds for every input.
 
 ## Status
 
-Present: the semantics, the generator, the generated transcription of the four inline blocks,
-the compositions and the asserted conditions, the fields, the vectors, and the CI checks
-(regeneration, skeletons, and the nanoda re-check). The proofs cover:
+Present for both AArch64 and x86-64: instruction semantics, mechanically generated
+transcriptions, compositions and asserted conditions, field constants, generated vectors,
+and the shared generation/skeleton and CI/export pipeline. The proofs cover:
 
 * the multiplication block with its two operand contracts, and the conversion as that block
   at `1`;
@@ -274,7 +274,17 @@ the compositions and the asserted conditions, the fields, the vectors, and the C
   multiplication;
 * the addition and subtraction blocks for every pair of operands on which they are exact, with
   their corollaries for a lazily reduced left operand and for canonical operands;
-* from those, the six entry points at either field under the conditions they assert.
+* fixed-schedule inversion, including approximate divsteps, signed coefficient updates,
+  full-range normalization, and the three-subtraction canonicalization epilogue;
+* from those, the seven entry points at either field under the conditions they assert.
+
+Inversion's unchanged entry contract proves a bounded canonical output, zero mapping to
+zero, and `value * result ≡ R² (mod p)` otherwise. It uses proved primality of the actual
+Pallas and Vesta moduli, not an extra convergence hypothesis. See
+[INVERSION-PLAN.md](INVERSION-PLAN.md) for the proof layout and completed checks.
+The Lean warning-failing build and entry axiom audits pass; the independent nanoda
+re-check of the completed inversion development has not been run locally because the
+required executables are unavailable.
 
 This covers the crate's current code, up to the aspects that the trust story lists as reviewed
 by hand.

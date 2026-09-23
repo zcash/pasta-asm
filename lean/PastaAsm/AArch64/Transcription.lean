@@ -1022,8 +1022,61 @@ def addWords (lhs rhs : WideLimbs) : WideLimbs :=
   let o8 := (addc o8 r8 c).1        -- adc o8,o8,r8
   ⟨o0, o1, o2, o3, o4, o5, o6, o7, o8⟩
 
-/-- Multiplication of a nine-word signed bitpattern by a signed scalar bitpattern modulo 2^576. -/
-def mulSigned (value : WideLimbs) (scalar : Nat) : WideLimbs :=
+/-- The magnitude and conditionally negated limbs produced by the first contiguous source phase of
+`mulSigned`. -/
+structure MulSignedPrepared where
+  l0 : Nat
+  l1 : Nat
+  l2 : Nat
+  l3 : Nat
+  l4 : Nat
+  l5 : Nat
+  l6 : Nat
+  l7 : Nat
+  l8 : Nat
+  magnitude : Nat
+  deriving DecidableEq, Repr
+
+namespace MulSignedPrepared
+
+/-- The register bounds supplied by a proof of the prepare/sign-negation phase. -/
+def Bounded (s : MulSignedPrepared) : Prop :=
+  s.l0 < 2^64 ∧ s.l1 < 2^64 ∧ s.l2 < 2^64 ∧ s.l3 < 2^64 ∧ s.l4 < 2^64 ∧
+  s.l5 < 2^64 ∧ s.l6 < 2^64 ∧ s.l7 < 2^64 ∧ s.l8 < 2^64 ∧ s.magnitude < 2^64
+
+end MulSignedPrepared
+
+/-- The low product limb and carry produced by a non-final contiguous product phase of
+`mulSigned`. -/
+structure MulSignedProduct where
+  low : Nat
+  carry : Nat
+  deriving DecidableEq, Repr
+
+namespace MulSignedProduct
+
+/-- The register bounds supplied by each non-final product-phase proof. -/
+def Bounded (s : MulSignedProduct) : Prop :=
+  s.low < 2^64 ∧ s.carry < 2^64
+
+end MulSignedProduct
+
+/-- The low limb produced by the final contiguous product phase of `mulSigned`. -/
+structure MulSignedLastProduct where
+  low : Nat
+  deriving DecidableEq, Repr
+
+namespace MulSignedLastProduct
+
+/-- The register bound supplied by the final product-phase proof. -/
+def Bounded (s : MulSignedLastProduct) : Prop :=
+  s.low < 2^64
+
+end MulSignedLastProduct
+
+/-- The contiguous scalar-magnitude and conditional-negation phase of `mulSigned`, copied from
+source PCs 0 through 20. -/
+def mulSignedPrepare (value : WideLimbs) (scalar : Nat) : MulSignedPrepared :=
   let scalar := scalar              -- argument
   let o0 := value.l0                -- argument
   let o1 := value.l1                -- argument
@@ -1071,52 +1124,80 @@ def mulSigned (value : WideLimbs) (scalar : Nat) : WideLimbs :=
   let o7 := s.1                     --   `-> o7
   let c := s.2                      --   `-> carry
   let o8 := (addc o8 0 c).1         -- adc o8,o8,xzr
+  ⟨o0, o1, o2, o3, o4, o5, o6, o7, o8, mag⟩
+
+/-- The first contiguous product phase of `mulSigned`: multiply limb zero and retain its high word
+as the carry. -/
+def mulSignedFirst (limb magnitude : Nat) : MulSignedProduct :=
+  let o0 := limb                    -- phase argument
+  let mag := magnitude              -- phase argument
   let carry := umulh o0 mag         -- umulh carry,o0,mag
   let o0 := mulLo o0 mag            -- mul o0,o0,mag
+  ⟨o0, carry⟩
+
+/-- One middle contiguous product phase of `mulSigned`. All seven unrolled source phases are checked
+to have this binding IR after source-limb normalization. -/
+def mulSignedRound (limb magnitude productCarry : Nat) : MulSignedProduct :=
+  let o1 := limb                    -- phase argument
+  let mag := magnitude              -- phase argument
+  let carry := productCarry         -- phase argument
   let hi := umulh o1 mag            -- umulh hi,o1,mag
   let o1 := mulLo o1 mag            -- mul o1,o1,mag
   let s := addc o1 carry 0          -- adds o1,o1,carry
   let o1 := s.1                     --   `-> o1
   let c := s.2                      --   `-> carry
   let carry := (addc hi 0 c).1      -- adc carry,hi,xzr
-  let hi := umulh o2 mag            -- umulh hi,o2,mag
-  let o2 := mulLo o2 mag            -- mul o2,o2,mag
-  let s := addc o2 carry 0          -- adds o2,o2,carry
-  let o2 := s.1                     --   `-> o2
-  let c := s.2                      --   `-> carry
-  let carry := (addc hi 0 c).1      -- adc carry,hi,xzr
-  let hi := umulh o3 mag            -- umulh hi,o3,mag
-  let o3 := mulLo o3 mag            -- mul o3,o3,mag
-  let s := addc o3 carry 0          -- adds o3,o3,carry
-  let o3 := s.1                     --   `-> o3
-  let c := s.2                      --   `-> carry
-  let carry := (addc hi 0 c).1      -- adc carry,hi,xzr
-  let hi := umulh o4 mag            -- umulh hi,o4,mag
-  let o4 := mulLo o4 mag            -- mul o4,o4,mag
-  let s := addc o4 carry 0          -- adds o4,o4,carry
-  let o4 := s.1                     --   `-> o4
-  let c := s.2                      --   `-> carry
-  let carry := (addc hi 0 c).1      -- adc carry,hi,xzr
-  let hi := umulh o5 mag            -- umulh hi,o5,mag
-  let o5 := mulLo o5 mag            -- mul o5,o5,mag
-  let s := addc o5 carry 0          -- adds o5,o5,carry
-  let o5 := s.1                     --   `-> o5
-  let c := s.2                      --   `-> carry
-  let carry := (addc hi 0 c).1      -- adc carry,hi,xzr
-  let hi := umulh o6 mag            -- umulh hi,o6,mag
-  let o6 := mulLo o6 mag            -- mul o6,o6,mag
-  let s := addc o6 carry 0          -- adds o6,o6,carry
-  let o6 := s.1                     --   `-> o6
-  let c := s.2                      --   `-> carry
-  let carry := (addc hi 0 c).1      -- adc carry,hi,xzr
-  let hi := umulh o7 mag            -- umulh hi,o7,mag
-  let o7 := mulLo o7 mag            -- mul o7,o7,mag
-  let s := addc o7 carry 0          -- adds o7,o7,carry
-  let o7 := s.1                     --   `-> o7
-  let c := s.2                      --   `-> carry
-  let carry := (addc hi 0 c).1      -- adc carry,hi,xzr
+  ⟨o1, carry⟩
+
+/-- The final contiguous product phase of `mulSigned`, with overflow above bit 575 discarded exactly
+as in the source. -/
+def mulSignedLast (limb magnitude productCarry : Nat) : MulSignedLastProduct :=
+  let o8 := limb                    -- phase argument
+  let mag := magnitude              -- phase argument
+  let carry := productCarry         -- phase argument
   let o8 := mulLo o8 mag            -- mul o8,o8,mag
   let o8 := add o8 carry            -- add o8,o8,carry
+  ⟨o8⟩
+
+/-- Multiplication of a nine-word signed bitpattern by a signed scalar bitpattern modulo 2^576. -/
+def mulSigned (value : WideLimbs) (scalar : Nat) : WideLimbs :=
+  let prepared := mulSignedPrepare value scalar  -- factored prepare/sign-negation phase
+  let o0 := prepared.l0             -- prepare/sign-negation phase output
+  let o1 := prepared.l1             -- prepare/sign-negation phase output
+  let o2 := prepared.l2             -- prepare/sign-negation phase output
+  let o3 := prepared.l3             -- prepare/sign-negation phase output
+  let o4 := prepared.l4             -- prepare/sign-negation phase output
+  let o5 := prepared.l5             -- prepare/sign-negation phase output
+  let o6 := prepared.l6             -- prepare/sign-negation phase output
+  let o7 := prepared.l7             -- prepare/sign-negation phase output
+  let o8 := prepared.l8             -- prepare/sign-negation phase output
+  let mag := prepared.magnitude     -- prepare/sign-negation phase output
+  let firstProduct := mulSignedFirst o0 mag  -- factored first product phase
+  let o0 := firstProduct.low        -- first product phase output
+  let carry := firstProduct.carry   -- first product phase output
+  let round1 := mulSignedRound o1 mag carry  -- factored product round 1
+  let o1 := round1.low              -- product round 1 output
+  let carry := round1.carry         -- product round 1 output
+  let round2 := mulSignedRound o2 mag carry  -- factored product round 2
+  let o2 := round2.low              -- product round 2 output
+  let carry := round2.carry         -- product round 2 output
+  let round3 := mulSignedRound o3 mag carry  -- factored product round 3
+  let o3 := round3.low              -- product round 3 output
+  let carry := round3.carry         -- product round 3 output
+  let round4 := mulSignedRound o4 mag carry  -- factored product round 4
+  let o4 := round4.low              -- product round 4 output
+  let carry := round4.carry         -- product round 4 output
+  let round5 := mulSignedRound o5 mag carry  -- factored product round 5
+  let o5 := round5.low              -- product round 5 output
+  let carry := round5.carry         -- product round 5 output
+  let round6 := mulSignedRound o6 mag carry  -- factored product round 6
+  let o6 := round6.low              -- product round 6 output
+  let carry := round6.carry         -- product round 6 output
+  let round7 := mulSignedRound o7 mag carry  -- factored product round 7
+  let o7 := round7.low              -- product round 7 output
+  let carry := round7.carry         -- product round 7 output
+  let lastProduct := mulSignedLast o8 mag carry  -- factored final product phase
+  let o8 := lastProduct.low         -- final product phase output
   ⟨o0, o1, o2, o3, o4, o5, o6, o7, o8⟩
 
 /-- Registers carried by one checked iteration of `divsteps47`. -/

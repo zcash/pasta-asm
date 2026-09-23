@@ -39,13 +39,16 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
     def emit(self, name, source=None):
         config = self.configs[name]
         source = self.source if source is None else source
+        if name == "mul_signed":
+            return gen_aarch64.emit_mul_signed(source, config)
         return (gen_aarch64.emit_loop_invert(source, config) if config.loop_count
                 else [gen_aarch64.emit_straight_invert(source, config)])
 
     def test_all_seven_source_blocks_and_two_round_helpers_are_registered(self):
         names = [routine.name for routine in gen_aarch64.all_routines()]
         self.assertEqual(names[5:], [
-            "divsteps31Round", "divsteps31", "updateAB", "addWords", "mulSigned",
+            "divsteps31Round", "divsteps31", "updateAB", "addWords",
+            "mulSignedPrepare", "mulSignedFirst", "mulSignedRound", "mulSignedLast", "mulSigned",
             "divsteps47Round", "divsteps47", "normalizeCoefficient", "reduceOnce",
         ])
         self.assertEqual([config.rust_name for config in gen_aarch64.INVERT_ROUTINES], [
@@ -60,6 +63,20 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
             "divsteps31": "def divsteps31 (a b : Limbs) : InvertMatrix :=",
             "updateAB": "def updateAB (a b : Limbs) (f g : Nat) : UpdateABResult :=",
             "addWords": "def addWords (lhs rhs : WideLimbs) : WideLimbs :=",
+            "mulSignedPrepare": (
+                "def mulSignedPrepare (value : WideLimbs) (scalar : Nat) : "
+                "MulSignedPrepared :="
+            ),
+            "mulSignedFirst": (
+                "def mulSignedFirst (limb magnitude : Nat) : MulSignedProduct :="
+            ),
+            "mulSignedRound": (
+                "def mulSignedRound (limb magnitude productCarry : Nat) : MulSignedProduct :="
+            ),
+            "mulSignedLast": (
+                "def mulSignedLast (limb magnitude productCarry : Nat) : "
+                "MulSignedLastProduct :="
+            ),
             "mulSigned": "def mulSigned (value : WideLimbs) (scalar : Nat) : WideLimbs :=",
             "divsteps47Round": "def divsteps47Round (acc : Divsteps47State) : Divsteps47State :=",
             "divsteps47": "def divsteps47 (a b : Nat) : InvertRow :=",
@@ -74,6 +91,27 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
         self.assertIn("import PastaAsm.Semantics.Inversion", generated)
         self.assertNotIn("structure WideLimbs", generated)
         self.assertNotIn("structure InvertMatrix", generated)
+
+    def test_factoring_byte_preserves_unrelated_inversion_routines(self):
+        old = []
+        for config in gen_aarch64.INVERT_ROUTINES:
+            old += (gen_aarch64.emit_loop_invert(self.source, config) if config.loop_count
+                    else [gen_aarch64.emit_straight_invert(self.source, config)])
+        new = gen_aarch64.all_routines()[5:]
+
+        def comment_column(routines):
+            return 2 + max(len(code) for routine in routines for code, _comment in routine.lines
+                           if code is not None and len(code) <= gen_aarch64.COMMENT_COLUMN_MAX)
+
+        self.assertEqual(comment_column(old), comment_column(new))
+        old_by_name = {routine.name: routine for routine in old}
+        new_by_name = {routine.name: routine for routine in new}
+        for name in sorted(set(old_by_name).intersection(new_by_name) - {"mulSigned"}):
+            with self.subTest(routine=name):
+                self.assertEqual(
+                    old_by_name[name].text(comment_column(old)),
+                    new_by_name[name].text(comment_column(new)),
+                )
 
     def test_every_real_helper_parses_with_exact_surrounding_rust(self):
         for config in gen_aarch64.INVERT_ROUTINES:
@@ -102,6 +140,79 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
                     self.assertTrue(any(entry["comment"] == instructions[pc][2]
                                         for entry in round_routine.emitter.entries
                                         if entry["pc"] == pc))
+
+    def test_mul_signed_factoring_covers_source_with_normalized_round_fingerprints(self):
+        prepare, first, round_, last, wrapper = self.emit("mul_signed")
+        block = gen_aarch64.parse_invert_helper(self.source, self.configs["mul_signed"])
+        instructions = gen_aarch64.instruction_ir(block.instructions)
+        phases = {
+            prepare.name: gen_aarch64.MUL_SIGNED_PREPARE_RANGE,
+            first.name: gen_aarch64.MUL_SIGNED_FIRST_RANGE,
+            round_.name: gen_aarch64.MUL_SIGNED_ROUND_RANGES[0],
+            last.name: gen_aarch64.MUL_SIGNED_LAST_RANGE,
+        }
+        covered = set()
+        for routine in (prepare, first, round_, last):
+            expected = set(range(phases[routine.name][0], phases[routine.name][1] + 1))
+            actual = {entry["pc"] for entry in routine.emitter.entries
+                      if entry["pc"] is not None}
+            self.assertEqual(actual, expected)
+            covered.update(actual)
+        covered.update(pc for first_pc, last_pc in gen_aarch64.MUL_SIGNED_ROUND_RANGES[1:]
+                       for pc in range(first_pc, last_pc + 1))
+        self.assertEqual(covered, set(range(len(instructions))))
+        self.assertFalse(any(entry["pc"] is not None for entry in wrapper.emitter.entries))
+
+        flattened = gen_aarch64.emit_straight_invert(
+            self.source, self.configs["mul_signed"], block
+        )
+        fingerprints = [
+            gen_aarch64.mul_signed_round_fingerprint(flattened.emitter, pc_range, f"o{index}")
+            for index, pc_range in enumerate(gen_aarch64.MUL_SIGNED_ROUND_RANGES, start=1)
+        ]
+        self.assertTrue(fingerprints[0])
+        self.assertTrue(all(fingerprint == fingerprints[0] for fingerprint in fingerprints))
+
+    def test_mul_signed_wrapper_calls_each_factored_phase_in_source_order(self):
+        prepare, first, round_, last, wrapper = self.emit("mul_signed")
+        calls = [entry for entry in wrapper.emitter.entries if entry["fact"][0] == "call"]
+        self.assertEqual(
+            [entry["expr"].split()[0] for entry in calls],
+            [prepare.name, first.name] + [round_.name] * 7 + [last.name],
+        )
+        self.assertEqual(wrapper.signature,
+                         "def mulSigned (value : WideLimbs) (scalar : Nat) : WideLimbs :=")
+        self.assertEqual(wrapper.result,
+                         "  ⟨o0, o1, o2, o3, o4, o5, o6, o7, o8⟩")
+
+    def test_mul_signed_helpers_expose_bounded_phase_contracts(self):
+        prepare, first, round_, last, wrapper = self.emit("mul_signed")
+        generated = "\n".join(routine.text(120) for routine in (prepare, first, round_, last))
+        self.assertIn("def Bounded (s : MulSignedPrepared) : Prop :=", generated)
+        self.assertIn("def Bounded (s : MulSignedProduct) : Prop :=", generated)
+        self.assertIn("def Bounded (s : MulSignedLastProduct) : Prop :=", generated)
+        self.assertEqual(prepare.arg_fields["value"], [f"l{index}" for index in range(9)])
+        self.assertLess(len(gen.skeleton(round_)), 100)
+        self.assertLess(len(gen.skeleton(last)), 100)
+        self.assertLess(len(gen.skeleton(wrapper)), 200)
+
+    def test_mul_signed_round_difference_is_rejected(self):
+        source = self.mutate_function(
+            "mul_signed",
+            '"adds {o4}, {o4}, {carry}",\n            "adc {carry}, {hi}, xzr",',
+            '"adds {o4}, {o4}, {carry}",\n            "adc {carry}, {hi}, {sign}",',
+        )
+        with self.assertRaisesRegex(
+            ValueError, "product rounds differ after source-limb normalization"
+        ):
+            self.emit("mul_signed", source)
+
+    def test_mul_signed_unsupported_phase_boundary_is_rejected(self):
+        source = self.mutate_function(
+            "mul_signed", '"umulh {carry}, {o0}, {mag}",', '"mul {carry}, {o0}, {mag}",'
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported first phase opcode fingerprint"):
+            self.emit("mul_signed", source)
 
     def test_divsteps47_wrapper_source_names_match_skeleton_ssa(self):
         _round, wrapper = self.emit("divsteps_47")
@@ -140,6 +251,43 @@ class AArch64InvertGeneratorTests(unittest.TestCase):
         self.assertIn("let a3 := cselNe z a3 a2", source)
         self.assertNotIn("let a3_1 := cselNe z a3 a2", source)
         self.assertEqual(wrapper.result, "  ⟨f0, g0, f1, g1⟩")
+
+    def test_shifted_in_place_operand_uses_current_skeleton_ssa_name(self):
+        [normalize] = self.emit("normalize_coefficient")
+        normalize_skeleton = "\n".join(gen.skeleton(normalize))
+        self.assertIn(
+            "have e_m4_3 : m4_3 = (m4_2 + (lsr sign_2 63) + 0) % 2^64 := rfl",
+            normalize_skeleton,
+        )
+        self.assertNotIn(
+            "have e_m4_3 : m4_3 = (m4_2 + (lsr sign 63) + 0) % 2^64 := rfl",
+            normalize_skeleton,
+        )
+
+        [update] = self.emit("update_ab")
+        update_skeleton = "\n".join(gen.skeleton(update))
+        # The first shift reads the initial `t5`; later shifts must read the
+        # currently rebound `t5` and `t4`, rather than their stale source names.
+        self.assertIn(
+            "have e_a0_2 : a0_2 = (a0_1 + (lsr t5 63) + 0) % 2^64 := rfl",
+            update_skeleton,
+        )
+        self.assertIn(
+            "have e_b0_2 : b0_2 = (b0_1 + (lsr t5_3 63) + 0) % 2^64 := rfl",
+            update_skeleton,
+        )
+        self.assertIn(
+            "have e_a0_7 : a0_7 = (a0_6 + (lsr t4_2 63) + 0) % 2^64 := rfl",
+            update_skeleton,
+        )
+        self.assertNotIn(
+            "have e_b0_2 : b0_2 = (b0_1 + (lsr t5 63) + 0) % 2^64 := rfl",
+            update_skeleton,
+        )
+        self.assertNotIn(
+            "have e_a0_7 : a0_7 = (a0_6 + (lsr t4 63) + 0) % 2^64 := rfl",
+            update_skeleton,
+        )
 
     def test_counter_branch_and_decrement_mutations_are_rejected(self):
         mutations = (

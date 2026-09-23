@@ -2,28 +2,82 @@
 Copyright (c) 2026 the pasta-asm contributors.
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
+import PastaAsm.AArch64.Spec.Add
+import PastaAsm.AArch64.Spec.Mul
+import PastaAsm.AArch64.Spec.Invert.Divsteps.Steps47
+import PastaAsm.AArch64.Spec.Invert.Multiply
+import PastaAsm.AArch64.Spec.Invert.Normalize
+import PastaAsm.AArch64.Spec.Invert.Update
 import PastaAsm.Fields.Inversion
-import PastaAsm.Spec.Invert.Batch
-import PastaAsm.X86_64.Spec.Add
-import PastaAsm.X86_64.Spec.FromMont
-import PastaAsm.X86_64.Spec.Invert.Divsteps
-import PastaAsm.X86_64.Spec.Invert.Normalize
 import PastaAsm.Spec.Invert.Schedule
-import PastaAsm.X86_64.Spec.Invert.Update
 
 /-!
-# Concrete arithmetic correspondence for x86-64 inversion
+# Concrete arithmetic correspondence for AArch64 inversion
 
-This module connects one concrete x86-64 inversion batch to the shared signed
-coefficient model.  Long-schedule iteration is kept in `Schedule.lean` so its
-induction never unfolds the generated approximation computation.
+This module connects one concrete AArch64 inversion batch to the shared signed
+coefficient model. Long-schedule iteration remains in the architecture-independent
+schedule module, so its induction never unfolds the generated approximation computation.
 -/
 
-namespace PastaAsm.X86_64
+namespace PastaAsm.AArch64
 
 open Spec.Invert Spec.Invert.Convergence Spec.Invert.Normalize Spec.Invert.Schedule
 
 set_option exponentiation.threshold 600
+set_option maxRecDepth 2000
+
+/-- The concrete 31-step helper returns register-sized coefficient bitpatterns. -/
+private theorem divsteps31_words_bounded (a b : Limbs) :
+    let matrix := divsteps31 a b
+    matrix.f0 < 2^64 ∧ matrix.g0 < 2^64 ∧ matrix.f1 < 2^64 ∧ matrix.g1 < 2^64 := by
+  dsimp only
+  unfold divsteps31
+  simp only
+  exact ⟨sub_lt _ _, sub_lt _ _, sub_lt _ _, sub_lt _ _⟩
+
+/-- The concrete full-width update returns register-sized row bitpatterns. -/
+private theorem updateAB_words_bounded (a b : Limbs) (f g : Nat) :
+    let out := updateAB a b f g
+    out.f < 2^64 ∧ out.g < 2^64 := by
+  dsimp only
+  unfold updateAB
+  simp only
+  exact ⟨sub_lt _ _, sub_lt _ _⟩
+
+/-- One final-divsteps round returns register-sized second-row bitpatterns. -/
+private theorem divsteps47Round_words_bounded (state : Divsteps47State) :
+    (divsteps47Round state).f1 < 2^64 ∧ (divsteps47Round state).g1 < 2^64 := by
+  unfold divsteps47Round
+  simp only
+  exact ⟨add_lt _ _, add_lt _ _⟩
+
+/-- The concrete final helper returns register-sized row bitpatterns. -/
+theorem divsteps47_words_bounded (a b : Nat) :
+    let row := divsteps47 a b
+    row.f1 < 2^64 ∧ row.g1 < 2^64 := by
+  dsimp only
+  unfold divsteps47
+  simp only
+  exact divsteps47Round_words_bounded _
+
+/-- Small bundle of final-row facts, used to prevent repeated elaboration of matrix projections. -/
+structure FinalRowFacts (row : InvertRow) (matrix : SignedMatrix) : Prop where
+  fBound : row.f1 < 2^64
+  gBound : row.g1 < 2^64
+  fRep : WordRep row.f1 matrix.row1.left
+  gRep : WordRep row.g1 matrix.row1.right
+  rowBound : matrix.row1.norm ≤ 2^47
+
+/-- The final helper exposes exactly the second-row facts consumed by the schedule proof. -/
+theorem divsteps47_row_spec (a b : Nat) (ha : a < 2^64) (hb : b < 2^64) (hodd : Odd b) :
+    let row := divsteps47 a b
+    let final := approxSteps 47 (ApproxState.initial a b)
+    FinalRowFacts row final.matrix ∧ Odd final.b := by
+  dsimp only
+  obtain ⟨hf, hg, hfinalOdd, hmatrixBound, _⟩ :=
+    divsteps47_spec a b ha hb hodd (divsteps47 a b) rfl
+  exact ⟨⟨(divsteps47_words_bounded a b).1, (divsteps47_words_bounded a b).2,
+    hf, hg, hmatrixBound.2⟩, hfinalOdd⟩
 
 /-- A bounded nine-word bitpattern represents an integer modulo its wrapping width. -/
 def WideCoeffRep (words : PastaAsm.WideLimbs) (coefficient : Int) : Prop :=
@@ -41,74 +95,86 @@ def WideCoeffRep (words : PastaAsm.WideLimbs) (coefficient : Int) : Prop :=
   · simp [PastaAsm.WideLimbs.Bounded, regMod]
   · simp [PastaAsm.WideLimbs.toNat]
 
-private theorem mulSigned9_signed_modEq
+private theorem mulSigned_signed_modEq
     (value : PastaAsm.WideLimbs) (scalar : Nat) (x : Int)
-    (hv : value.Bounded) (hscalar : SignedWordRep scalar x)
+    (hv : value.Bounded) (hscalarBound : scalar < 2^64) (hscalar : WordRep scalar x)
     (hx : x.natAbs < 2^63) :
-    (mulSigned9 value scalar).Bounded ∧
-      (mulSigned9 value scalar).toNat ≡ (value.toNat : Int) * x
+    (mulSigned value scalar).Bounded ∧
+      (mulSigned value scalar).toNat ≡ (value.toNat : Int) * x
         [ZMOD coefficientModulus] := by
-  have hslt : scalar < 2^64 := hscalar.1
-  obtain ⟨hout, hcases⟩ := mulSigned9_spec value scalar hv hslt
+  obtain ⟨hout, hcases⟩ := mulSigned_spec value scalar hv hscalarBound _ rfl
   refine ⟨hout, ?_⟩
-  rcases hscalar.2 with ⟨k, hk⟩
+  rw [WordRep, Int.modEq_iff_dvd] at hscalar
+  rcases hscalar with ⟨k, hk⟩
+  let j := -k
+  have hk' : x - (scalar : Int) = (2^64 : Int) * k := by
+    norm_num only at hk ⊢
+    exact hk
+  have hj : (scalar : Int) - x = (2^64 : Int) * j := by
+    dsimp only [j]
+    rw [show (scalar : Int) - x = -(x - scalar) by ring, hk']
+    ring
   rcases hcases with ⟨hsmall, hmod⟩ | ⟨hlarge, hmod⟩
-  · have hkzero : k = 0 := by
+  · have hjzero : j = 0 := by
       have hscalarInt : (scalar : Int) < 2^63 := by exact_mod_cast hsmall
       have hxlower : -(2^63 : Int) < x := by
         have habs : (x.natAbs : Int) < 2^63 := by exact_mod_cast hx
         omega
-      norm_num only at hk
+      norm_num only at hj
       omega
     have hxeq : x = scalar := by
-      norm_num only at hk
-      rw [hkzero] at hk
+      norm_num only at hj
+      rw [hjzero] at hj
       omega
     simpa only [hxeq, Int.natCast_mul] using Int.natCast_modEq_iff.mpr hmod
-  · have hkone : k = 1 := by
+  · have hjone : j = 1 := by
       have hscalarInt : (2^63 : Int) ≤ scalar := by exact_mod_cast hlarge
       have hxupper : x < (2^63 : Int) := by
         have habs : (x.natAbs : Int) < 2^63 := by exact_mod_cast hx
         omega
-      norm_num only at hk
+      norm_num only at hj
       omega
     have hxeq : x = (scalar : Int) - 2^64 := by
-      norm_num only at hk
-      rw [hkone] at hk
+      norm_num only at hj
+      rw [hjone] at hj
       omega
     have hcast := Int.natCast_modEq_iff.mpr hmod
-    rw [Int.natCast_add, Int.natCast_mul] at hcast
     have hsubCast : ((2^64 - scalar : Nat) : Int) = (2^64 : Int) - scalar := by
-      rw [Int.natCast_sub hslt.le]
+      rw [Int.natCast_sub hscalarBound.le]
       norm_num
+    push_cast at hcast
+    have hsubCast' : ((18446744073709551616 - scalar : Nat) : Int) =
+        (18446744073709551616 : Int) - scalar := by
+      simpa only [show (18446744073709551616 : Nat) = 2^64 by norm_num] using hsubCast
+    rw [hsubCast'] at hcast
     rw [Int.modEq_iff_dvd] at hcast ⊢
-    rw [hsubCast] at hcast
     convert hcast using 1
     all_goals (rw [hxeq]; ring)
 
 /-- The concrete nine-word linear combination applies a represented signed row. -/
-theorem invertLincomb9_rep
+theorem invertLincomb_rep
     (u v : PastaAsm.WideLimbs) (f g : Nat) (x y left right : Int)
     (hu : WideCoeffRep u x) (hv : WideCoeffRep v y)
-    (hf : SignedWordRep f left) (hg : SignedWordRep g right)
+    (hfBound : f < 2^64) (hgBound : g < 2^64)
+    (hf : WordRep f left) (hg : WordRep g right)
     (hleft : left.natAbs < 2^63) (hright : right.natAbs < 2^63) :
-    WideCoeffRep (invertLincomb9 u v f g) (left * x + right * y) := by
-  obtain ⟨huf, hufMod⟩ := mulSigned9_signed_modEq u f left hu.1 hf hleft
-  obtain ⟨hvg, hvgMod⟩ := mulSigned9_signed_modEq v g right hv.1 hg hright
-  have hout := addWords9_spec (mulSigned9 u f) (mulSigned9 v g) huf hvg
-  refine ⟨hout.1, ?_⟩
+    WideCoeffRep (invertLincomb u v f g) (left * x + right * y) := by
+  obtain ⟨huf, hufMod⟩ := mulSigned_signed_modEq u f left hu.1 hfBound hf hleft
+  obtain ⟨hvg, hvgMod⟩ := mulSigned_signed_modEq v g right hv.1 hgBound hg hright
+  obtain ⟨hout, _, _, _⟩ := addWords_spec (mulSigned u f) (mulSigned v g) huf hvg _ rfl
+  refine ⟨hout, ?_⟩
   have hadd := Int.natCast_modEq_iff.mpr
-    (addWords9_modEq (mulSigned9 u f) (mulSigned9 v g) huf hvg)
+    (addWords_modEq (mulSigned u f) (mulSigned v g) huf hvg)
   have huMod : (u.toNat : Int) ≡ x [ZMOD coefficientModulus] := by
     exact (Int.modEq_iff_dvd.mpr hu.2).symm
   have hvMod : (v.toNat : Int) ≡ y [ZMOD coefficientModulus] := by
     exact (Int.modEq_iff_dvd.mpr hv.2).symm
-  have hresult : ((invertLincomb9 u v f g).toNat : Int) ≡
+  have hresult : ((invertLincomb u v f g).toNat : Int) ≡
       left * x + right * y [ZMOD coefficientModulus] := by
     calc
-      ((invertLincomb9 u v f g).toNat : Int) ≡
-          ((mulSigned9 u f).toNat : Int) + ((mulSigned9 v g).toNat : Int)
-          [ZMOD coefficientModulus] := by simpa [invertLincomb9] using hadd
+      ((invertLincomb u v f g).toNat : Int) ≡
+          ((mulSigned u f).toNat : Int) + ((mulSigned v g).toNat : Int)
+          [ZMOD coefficientModulus] := by simpa [invertLincomb] using hadd
       _ ≡ (u.toNat : Int) * left + (v.toNat : Int) * right
           [ZMOD coefficientModulus] := hufMod.add hvgMod
       _ ≡ x * left + y * right [ZMOD coefficientModulus] :=
@@ -228,10 +294,10 @@ theorem invertBatch_components_spec
     (hrow1 : batchMatrix.row1 = SignedRow.scale (orient quotients.2) raw.row1)
     (hbatchBound : batchMatrix.Bounded (2^31)) (hnextOdd : Odd nextState.2) :
     ∀ matrix, matrix = divsteps31 state.a state.b →
-    ∀ nextA, nextA = updateAb state.a state.b matrix.f0 matrix.g0 →
-    ∀ nextB, nextB = updateAb state.a state.b matrix.f1 matrix.g1 →
-    ∀ nextU, nextU = invertLincomb9 state.u state.v nextA.f nextA.g →
-    ∀ nextV, nextV = invertLincomb9 state.u state.v nextB.f nextB.g →
+    ∀ nextA, nextA = updateAB state.a state.b matrix.f0 matrix.g0 →
+    ∀ nextB, nextB = updateAB state.a state.b matrix.f1 matrix.g1 →
+    ∀ nextU, nextU = invertLincomb state.u state.v nextA.f nextA.g →
+    ∀ nextV, nextV = invertLincomb state.u state.v nextB.f nextB.g →
       nextA.value.Bounded ∧ nextB.value.Bounded ∧
       nextA.value.toNat = nextState.1 ∧ nextB.value.toNat = nextState.2 ∧
       Odd nextB.value.toNat ∧
@@ -243,6 +309,10 @@ theorem invertBatch_components_spec
   subst nextU
   subst nextV
   have hdivsteps := divsteps31_spec state.a state.b ha hb hodd matrix hmatrix
+  have hmatrixWords : matrix.f0 < 2^64 ∧ matrix.g0 < 2^64 ∧
+      matrix.f1 < 2^64 ∧ matrix.g1 < 2^64 := by
+    rw [hmatrix]
+    exact divsteps31_words_bounded state.a state.b
   have hmatrixRep : InvertMatrixRep matrix raw := by
     rw [← hraw]
     exact hdivsteps.1
@@ -257,26 +327,34 @@ theorem invertBatch_components_spec
     exact update_numerator_lt state.a state.b raw.row1 ha hb hrawBound.2
   have hentries0 := row_entry_lt_signed_word hrawBound.1
   have hentries1 := row_entry_lt_signed_word hrawBound.2
+  have hzeroRows := semolinaShort_left_nonneg_if_zero state.a.toNat state.b.toNat
+  have hzero0 : state.a.toNat = 0 → 0 ≤ raw.row0.left := by rw [← hraw]; exact hzeroRows.1
+  have hzero1 : state.a.toNat = 0 → 0 ≤ raw.row1.left := by rw [← hraw]; exact hzeroRows.2
+  have hbPos : 0 < state.b.toNat := by
+    rcases hodd with ⟨k, hk⟩
+    omega
   obtain ⟨hnextABound, hnextAValue, hnextAF, hnextAG⟩ :=
-    updateAb_exact state.a state.b matrix.f0 matrix.g0 raw.row0.left raw.row0.right
-      ha hb hmatrixRep.1 hmatrixRep.2.1 hentries0.1 hentries0.2
-      (by simpa only [hnums0] using hnum0) (by simpa only [hnums0] using hdiv0)
+    updateAB_exact state.a state.b matrix.f0 matrix.g0 raw.row0.left raw.row0.right
+      ha hb hmatrixWords.1 hmatrixWords.2.1 hmatrixRep.1 hmatrixRep.2.1
+      hentries0.1 hentries0.2 hzero0 hbPos
+      (by simpa only [hnums0, SignedRow.apply] using hnum0)
+      (by simpa only [hnums0, SignedRow.apply] using hdiv0) _ rfl
   obtain ⟨hnextBBound, hnextBValue, hnextBF, hnextBG⟩ :=
-    updateAb_exact state.a state.b matrix.f1 matrix.g1 raw.row1.left raw.row1.right
-      ha hb hmatrixRep.2.2.1 hmatrixRep.2.2.2 hentries1.1 hentries1.2
-      (by simpa only [hnums1] using hnum1) (by simpa only [hnums1] using hdiv1)
-  have hvalueA : (updateAb state.a state.b matrix.f0 matrix.g0).value.toNat = nextState.1 := by
+    updateAB_exact state.a state.b matrix.f1 matrix.g1 raw.row1.left raw.row1.right
+      ha hb hmatrixWords.2.2.1 hmatrixWords.2.2.2 hmatrixRep.2.2.1 hmatrixRep.2.2.2
+      hentries1.1 hentries1.2 hzero1 hbPos
+      (by simpa only [hnums1, SignedRow.apply] using hnum1)
+      (by simpa only [hnums1, SignedRow.apply] using hdiv1) _ rfl
+  have hvalueA : (updateAB state.a state.b matrix.f0 matrix.g0).value.toNat = nextState.1 := by
     calc
-      (updateAb state.a state.b matrix.f0 matrix.g0).value.toNat = nums.1.natAbs / 2^31 := by
-        simpa only [hnums0] using hnextAValue
+      _ = nums.1.natAbs / 2^31 := by simpa only [hnums0, SignedRow.apply] using hnextAValue
       _ = (nums.1 / (2^31 : Int)).natAbs :=
         (natAbs_ediv_of_dvd (by positivity) hdiv0).symm
       _ = quotients.1.natAbs := by rw [hquot0]
       _ = nextState.1 := hnext0.symm
-  have hvalueB : (updateAb state.a state.b matrix.f1 matrix.g1).value.toNat = nextState.2 := by
+  have hvalueB : (updateAB state.a state.b matrix.f1 matrix.g1).value.toNat = nextState.2 := by
     calc
-      (updateAb state.a state.b matrix.f1 matrix.g1).value.toNat = nums.2.natAbs / 2^31 := by
-        simpa only [hnums1] using hnextBValue
+      _ = nums.2.natAbs / 2^31 := by simpa only [hnums1, SignedRow.apply] using hnextBValue
       _ = (nums.2 / (2^31 : Int)).natAbs :=
         (natAbs_ediv_of_dvd (by positivity) hdiv1).symm
       _ = quotients.2.natAbs := by rw [hquot1]
@@ -287,42 +365,46 @@ theorem invertBatch_components_spec
   have horient1 : orient quotients.2 = orient nums.2 := by
     rw [hquot1]
     exact orient_ediv_eq_of_dvd (by positivity) hdiv1
-  have hnextAF' : SignedWordRep (updateAb state.a state.b matrix.f0 matrix.g0).f
+  have hnextAF' : WordRep (updateAB state.a state.b matrix.f0 matrix.g0).f
       batchMatrix.row0.left := by
     rw [hrow0]
-    change SignedWordRep _ (orient quotients.1 * raw.row0.left)
+    change WordRep _ (orient quotients.1 * raw.row0.left)
     rw [horient0, hnums0]
-    exact hnextAF
-  have hnextAG' : SignedWordRep (updateAb state.a state.b matrix.f0 matrix.g0).g
+    simpa only [SignedRow.apply] using hnextAF
+  have hnextAG' : WordRep (updateAB state.a state.b matrix.f0 matrix.g0).g
       batchMatrix.row0.right := by
     rw [hrow0]
-    change SignedWordRep _ (orient quotients.1 * raw.row0.right)
+    change WordRep _ (orient quotients.1 * raw.row0.right)
     rw [horient0, hnums0]
-    exact hnextAG
-  have hnextBF' : SignedWordRep (updateAb state.a state.b matrix.f1 matrix.g1).f
+    simpa only [SignedRow.apply] using hnextAG
+  have hnextBF' : WordRep (updateAB state.a state.b matrix.f1 matrix.g1).f
       batchMatrix.row1.left := by
     rw [hrow1]
-    change SignedWordRep _ (orient quotients.2 * raw.row1.left)
+    change WordRep _ (orient quotients.2 * raw.row1.left)
     rw [horient1, hnums1]
-    exact hnextBF
-  have hnextBG' : SignedWordRep (updateAb state.a state.b matrix.f1 matrix.g1).g
+    simpa only [SignedRow.apply] using hnextBF
+  have hnextBG' : WordRep (updateAB state.a state.b matrix.f1 matrix.g1).g
       batchMatrix.row1.right := by
     rw [hrow1]
-    change SignedWordRep _ (orient quotients.2 * raw.row1.right)
+    change WordRep _ (orient quotients.2 * raw.row1.right)
     rw [horient1, hnums1]
-    exact hnextBG
+    simpa only [SignedRow.apply] using hnextBG
   have hbatchEntries0 := row_entry_lt_signed_word hbatchBound.1
   have hbatchEntries1 := row_entry_lt_signed_word hbatchBound.2
-  have hnextURep := invertLincomb9_rep state.u state.v
-    (updateAb state.a state.b matrix.f0 matrix.g0).f
-    (updateAb state.a state.b matrix.f0 matrix.g0).g
+  have hnextAWords := updateAB_words_bounded state.a state.b matrix.f0 matrix.g0
+  have hnextBWords := updateAB_words_bounded state.a state.b matrix.f1 matrix.g1
+  have hnextURep := invertLincomb_rep state.u state.v
+    (updateAB state.a state.b matrix.f0 matrix.g0).f
+    (updateAB state.a state.b matrix.f0 matrix.g0).g
     coeff.first coeff.second batchMatrix.row0.left batchMatrix.row0.right
-    hu hv hnextAF' hnextAG' hbatchEntries0.1 hbatchEntries0.2
-  have hnextVRep := invertLincomb9_rep state.u state.v
-    (updateAb state.a state.b matrix.f1 matrix.g1).f
-    (updateAb state.a state.b matrix.f1 matrix.g1).g
+    hu hv hnextAWords.1 hnextAWords.2 hnextAF' hnextAG'
+    hbatchEntries0.1 hbatchEntries0.2
+  have hnextVRep := invertLincomb_rep state.u state.v
+    (updateAB state.a state.b matrix.f1 matrix.g1).f
+    (updateAB state.a state.b matrix.f1 matrix.g1).g
     coeff.first coeff.second batchMatrix.row1.left batchMatrix.row1.right
-    hu hv hnextBF' hnextBG' hbatchEntries1.1 hbatchEntries1.2
+    hu hv hnextBWords.1 hnextBWords.2 hnextBF' hnextBG'
+    hbatchEntries1.1 hbatchEntries1.2
   refine ⟨hnextABound, hnextBBound, hvalueA, hvalueB, ?_, ?_, ?_⟩
   · rw [hvalueB]
     exact hnextOdd
@@ -337,10 +419,10 @@ theorem invertBatch_rep (state : InvertState) (values : Nat × Nat) (coeff : Coe
   rcases hstate with ⟨ha, hb, hstateA, hstateB, hodd, hu, hv⟩
   have hoddConcrete : Odd state.b.toNat := by simpa only [hstateB] using hodd
   let matrix := divsteps31 state.a state.b
-  let nextA := updateAb state.a state.b matrix.f0 matrix.g0
-  let nextB := updateAb state.a state.b matrix.f1 matrix.g1
-  let nextU := invertLincomb9 state.u state.v nextA.f nextA.g
-  let nextV := invertLincomb9 state.u state.v nextB.f nextB.g
+  let nextA := updateAB state.a state.b matrix.f0 matrix.g0
+  let nextB := updateAB state.a state.b matrix.f1 matrix.g1
+  let nextU := invertLincomb state.u state.v nextA.f nextA.g
+  let nextV := invertLincomb state.u state.v nextB.f nextB.g
   have hcomponents := invertBatch_components_spec state coeff view.raw view.numerators
     view.quotients view.batchMatrix view.nextState ha hb hoddConcrete hu hv
     (by simpa only [hstateA, hstateB] using view.raw_eq)
@@ -364,25 +446,22 @@ theorem Limbs.l0_eq_toNat_of_lt_word (value : Limbs) (hlt : value.toNat < 2^64) 
   unfold Limbs.toNat at hlt ⊢
   omega
 
-/-- The concrete final-row linear combination represents its signed abstract
-coefficient. The interface takes only the four component facts needed by the
-linear-combination proof, avoiding projection through a complete batch witness. -/
+/-- The concrete final-row linear combination represents its signed abstract coefficient. -/
 theorem finalCoefficient_rep (u v : PastaAsm.WideLimbs) (f g : Nat) (coeff : CoeffPair)
     (row : SignedRow)
     (hu : WideCoeffRep u coeff.first) (hv : WideCoeffRep v coeff.second)
-    (hf : SignedWordRep f row.left) (hg : SignedWordRep g row.right)
+    (hfBound : f < 2^64) (hgBound : g < 2^64)
+    (hf : WordRep f row.left) (hg : WordRep g row.right)
     (hrow : row.norm ≤ 2^47) :
-    WideCoeffRep (invertLincomb9 u v f g)
-      (row.apply coeff.first coeff.second) := by
+    WideCoeffRep (invertLincomb u v f g) (row.apply coeff.first coeff.second) := by
   have hentries : row.left.natAbs < 2^63 ∧ row.right.natAbs < 2^63 := by
     unfold SignedRow.norm at hrow
     constructor <;> omega
   simpa only [SignedRow.apply] using
-    invertLincomb9_rep u v f g coeff.first coeff.second row.left row.right
-      hu hv hf hg hentries.1 hentries.2
+    invertLincomb_rep u v f g coeff.first coeff.second row.left row.right
+      hu hv hfBound hgBound hf hg hentries.1 hentries.2
 
-/-- A represented coefficient within the complete schedule bound decodes exactly
-and lies in the normalizer's closed signed range. -/
+/-- A represented coefficient within the complete schedule bound decodes exactly. -/
 theorem WideCoeffRep.schedule_range {words : PastaAsm.WideLimbs} {coefficient : Int}
     (hrep : WideCoeffRep words coefficient)
     (hbound : coefficient.natAbs ≤ 2^scheduleBits) :
@@ -410,9 +489,7 @@ theorem schedule_scale_eq_R_sq : 2^scheduleBits = R^2 := by
   rw [show 512 = 256 * 2 by omega, pow_mul]
 
 /-- The complete schedule connects the represented final concrete coefficient
-to its closed normalization range and its `R²` congruence.  Keeping all row
-expressions behind this boundary prevents the concrete driver from elaborating
-the transported schedule invariant. -/
+with its closed normalization range and `R²` congruence. -/
 theorem finalCoefficient_schedule_spec
     {modulus input : Nat} {start finish : BatchPoint}
     {matrix : SignedMatrix} {after : GCDState}
@@ -425,18 +502,19 @@ theorem finalCoefficient_schedule_spec
     (hafter : after.second = 1)
     (hu : WideCoeffRep u finish.coeff.first)
     (hv : WideCoeffRep v finish.coeff.second)
-    (hf : SignedWordRep f matrix.row1.left)
-    (hg : SignedWordRep g matrix.row1.right)
+    (hfBound : f < 2^64) (hgBound : g < 2^64)
+    (hf : WordRep f matrix.row1.left)
+    (hg : WordRep g matrix.row1.right)
     (hrow : matrix.row1.norm ≤ 2^47) :
-    let coefficient := invertLincomb9 u v f g
+    let coefficient := invertLincomb u v f g
     coefficient.Bounded ∧
       -(coefficientRadix : Int) ≤ coefficient.toInt ∧
       coefficient.toInt ≤ coefficientRadix ∧
       (modulus : Int) ∣ (R^2 : Int) - coefficient.toInt * input := by
   dsimp only
-  let coefficient := invertLincomb9 u v f g
+  let coefficient := invertLincomb u v f g
   have hcoefficientRep := finalCoefficient_rep u v f g finish.coeff matrix.row1
-    hu hv hf hg hrow
+    hu hv hfBound hgBound hf hg hrow
   have hbatches : Batches 31 15 initialCoefficients finish.coeff := by
     rw [← hstartCoeff]
     exact batchSchedule_batches schedule
@@ -457,9 +535,141 @@ theorem finalCoefficient_schedule_spec
     simpa only [schedule_scale_eq_R_sq] using habstractInvariant
   exact ⟨hcoefficientRep.1, hcoefficientLower, hcoefficientUpper, hconcreteInvariant⟩
 
+/-- A final concrete row connects the represented prefix coefficients to the complete
+schedule invariant. This boundary keeps row projections out of the top-level driver proof. -/
+theorem finalRowCoefficient_schedule_spec
+    {modulus input : Nat} {start finish : BatchPoint}
+    {matrix : SignedMatrix} {after : GCDState}
+    (u v : PastaAsm.WideLimbs) (row : InvertRow)
+    (schedule : RelationN BatchRel 15 start finish)
+    (hstartValues : start.values = (input, modulus))
+    (hstartCoeff : start.coeff = initialCoefficients)
+    (htransition : ScaledTransition 47 matrix
+      ⟨finish.values.1, finish.values.2⟩ after)
+    (hafter : after.second = 1)
+    (hu : WideCoeffRep u finish.coeff.first)
+    (hv : WideCoeffRep v finish.coeff.second)
+    (hfBound : row.f1 < 2^64) (hgBound : row.g1 < 2^64)
+    (hf : WordRep row.f1 matrix.row1.left)
+    (hg : WordRep row.g1 matrix.row1.right)
+    (hrow : matrix.row1.norm ≤ 2^47) :
+    let coefficient := invertLincomb u v row.f1 row.g1
+    coefficient.Bounded ∧
+      -(coefficientRadix : Int) ≤ coefficient.toInt ∧
+      coefficient.toInt ≤ coefficientRadix ∧
+      (modulus : Int) ∣ (R^2 : Int) - coefficient.toInt * input := by
+  exact finalCoefficient_schedule_spec u v row.f1 row.g1 schedule hstartValues hstartCoeff
+    htransition hafter hu hv hfBound hgBound hf hg hrow
+
+/-- Small bundle of final-tail facts, used to prevent repeated elaboration of matrix projections. -/
+structure FinalTailFacts (row : InvertRow) (matrix : SignedMatrix) (after : GCDState) : Prop where
+  rowFacts : FinalRowFacts row matrix
+  terminal : after.second = 1
+
+/-- Explicit-coefficient form of the final-row schedule boundary. -/
+theorem finalRowCoefficient_named_spec
+    {modulus input : Nat} {start finish : BatchPoint}
+    {matrix : SignedMatrix} {after : GCDState}
+    (u v : PastaAsm.WideLimbs) (row : InvertRow) (coefficient : PastaAsm.WideLimbs)
+    (hcoefficient : coefficient = invertLincomb u v row.f1 row.g1)
+    (schedule : RelationN BatchRel 15 start finish)
+    (hstartValues : start.values = (input, modulus))
+    (hstartCoeff : start.coeff = initialCoefficients)
+    (htransition : ScaledTransition 47 matrix
+      ⟨finish.values.1, finish.values.2⟩ after)
+    (hafter : after.second = 1)
+    (hu : WideCoeffRep u finish.coeff.first)
+    (hv : WideCoeffRep v finish.coeff.second)
+    (hfBound : row.f1 < 2^64) (hgBound : row.g1 < 2^64)
+    (hf : WordRep row.f1 matrix.row1.left)
+    (hg : WordRep row.g1 matrix.row1.right)
+    (hrow : matrix.row1.norm ≤ 2^47) :
+    coefficient.Bounded ∧
+      -(coefficientRadix : Int) ≤ coefficient.toInt ∧
+      coefficient.toInt ≤ coefficientRadix ∧
+      (modulus : Int) ∣ (R^2 : Int) - coefficient.toInt * input := by
+  subst coefficient
+  exact finalRowCoefficient_schedule_spec u v row schedule hstartValues hstartCoeff
+    htransition hafter hu hv hfBound hgBound hf hg hrow
+
+/-- Bundled final-tail form used by the top-level driver proof. -/
+theorem finalTailCoefficient_spec
+    {modulus input : Nat} {start finish : BatchPoint}
+    {matrix : SignedMatrix} {after : GCDState}
+    (u v : PastaAsm.WideLimbs) (row : InvertRow) (coefficient : PastaAsm.WideLimbs)
+    (hcoefficient : coefficient = invertLincomb u v row.f1 row.g1)
+    (schedule : RelationN BatchRel 15 start finish)
+    (hstartValues : start.values = (input, modulus))
+    (hstartCoeff : start.coeff = initialCoefficients)
+    (htransition : ScaledTransition 47 matrix
+      ⟨finish.values.1, finish.values.2⟩ after)
+    (hu : WideCoeffRep u finish.coeff.first)
+    (hv : WideCoeffRep v finish.coeff.second)
+    (facts : FinalTailFacts row matrix after) :
+    coefficient.Bounded ∧
+      -(coefficientRadix : Int) ≤ coefficient.toInt ∧
+      coefficient.toInt ≤ coefficientRadix ∧
+      (modulus : Int) ∣ (R^2 : Int) - coefficient.toInt * input := by
+  exact finalRowCoefficient_named_spec u v row coefficient hcoefficient schedule
+    hstartValues hstartCoeff htransition facts.terminal hu hv facts.rowFacts.fBound
+    facts.rowFacts.gBound facts.rowFacts.fRep facts.rowFacts.gRep facts.rowFacts.rowBound
+
+/-- The shared final approximation transition, specialized to a named prefix endpoint. -/
+theorem finalTransition_spec (a b : Nat) (values : Nat × Nat)
+    (ha : a = values.1) (hb : b = values.2) (hodd : Odd b) :
+    let final := approxSteps 47 (ApproxState.initial a b)
+    ScaledTransition 47 final.matrix ⟨values.1, values.2⟩ ⟨final.a, final.b⟩ := by
+  dsimp only
+  have hrepr := approxSteps_initial_representation 47 a b hodd
+  simpa only [ha, hb] using hrepr
+
+/-- Three applications of the epilogue reduction helper reduce any bounded four-limb
+value to a canonical Pasta residue. Each application preserves its residue. -/
+theorem reduceThree_spec (value modulus : Limbs) (hv : value.Bounded)
+    (hm : modulus.Bounded) (hshape : modulus.l2 = 0 ∧ modulus.l3 = 2^62) :
+    let high1 := reduceOnce value modulus
+    let high2 := reduceOnce high1 modulus
+    let high := reduceOnce high2 modulus
+    high.Bounded ∧ high.toNat < modulus.toNat ∧
+      high.toNat ≡ value.toNat [MOD modulus.toNat] := by
+  dsimp only
+  let high1 := reduceOnce value modulus
+  let high2 := reduceOnce high1 modulus
+  let high := reduceOnce high2 modulus
+  obtain ⟨hhigh1, hcases1⟩ := reduceOnce_spec value modulus hv hm high1 rfl
+  obtain ⟨hhigh2, hcases2⟩ := reduceOnce_spec high1 modulus hhigh1 hm high2 rfl
+  obtain ⟨hhigh, hcases3⟩ := reduceOnce_spec high2 modulus hhigh2 hm high rfl
+  have hmod1 : high1.toNat ≡ value.toNat [MOD modulus.toNat] := by
+    rcases hcases1 with ⟨_, heq⟩ | ⟨_, heq⟩
+    · exact modEq_of_add_mul _ _ 0 0 _ (by omega)
+    · exact modEq_of_add_mul _ _ 1 0 _ (by omega)
+  have hmod2 : high2.toNat ≡ high1.toNat [MOD modulus.toNat] := by
+    rcases hcases2 with ⟨_, heq⟩ | ⟨_, heq⟩
+    · exact modEq_of_add_mul _ _ 0 0 _ (by omega)
+    · exact modEq_of_add_mul _ _ 1 0 _ (by omega)
+  have hmod3 : high.toNat ≡ high2.toNat [MOD modulus.toNat] := by
+    rcases hcases3 with ⟨_, heq⟩ | ⟨_, heq⟩
+    · exact modEq_of_add_mul _ _ 0 0 _ (by omega)
+    · exact modEq_of_add_mul _ _ 1 0 _ (by omega)
+  have hpLower : 2^254 ≤ modulus.toNat := by
+    calc
+      2^254 = 2^192 * 2^62 := by norm_num [pow_add]
+      _ ≤ modulus.toNat := by
+        simp only [Limbs.toNat, hshape.1, hshape.2, mul_zero, add_zero]
+        omega
+  have hvalueLt : value.toNat < 4 * modulus.toNat := by
+    apply lt_of_lt_of_le (Limbs.toNat_lt value hv)
+    calc
+      2^256 = 4 * 2^254 := by norm_num [pow_add]
+      _ ≤ 4 * modulus.toNat := Nat.mul_le_mul_left 4 hpLower
+  refine ⟨hhigh, ?_, hmod3.trans (hmod2.trans hmod1)⟩
+  change high.toNat < modulus.toNat
+  rcases hcases1 with ⟨h1lt, h1eq⟩ | ⟨h1ge, h1eq⟩ <;>
+    rcases hcases2 with ⟨h2lt, h2eq⟩ | ⟨h2ge, h2eq⟩ <;>
+      rcases hcases3 with ⟨h3lt, h3eq⟩ | ⟨h3ge, h3eq⟩ <;> omega
+
 /-- The concrete normalization and reduction epilogue turns the schedule's signed
-coefficient congruence into a canonical inverse result.  This boundary keeps the
-large inversion execution out of the modular arithmetic proof. -/
+coefficient congruence into a canonical inverse result. -/
 theorem invertEpilogue_spec
     (coefficient : PastaAsm.WideLimbs) (modulus : Limbs) (inv converted original : Nat)
     (hcoefficientBound : coefficient.Bounded) (hm : modulus.Bounded)
@@ -471,30 +681,31 @@ theorem invertEpilogue_spec
     (hcoefficientInvariant : (modulus.toNat : Int) ∣
       (R^2 : Int) - coefficient.toInt * converted)
     (hconverted : R * converted ≡ original [MOD modulus.toNat]) :
-    let normalized := normalizeCoefficient coefficient modulus
-    let low := fromMont normalized.1 modulus inv
-    let high1 := reduceOnce normalized.2 modulus
+    let split := normalizeCoefficient coefficient modulus
+    let low := fromMont split.low modulus inv
+    let high1 := reduceOnce split.high modulus
     let high2 := reduceOnce high1 modulus
     let high := reduceOnce high2 modulus
     let out := addMod low high modulus
     out.Bounded ∧ out.toNat < modulus.toNat ∧
       original * out.toNat ≡ R^2 [MOD modulus.toNat] := by
   dsimp only
-  let normalized := normalizeCoefficient coefficient modulus
-  let low := fromMont normalized.1 modulus inv
-  let high1 := reduceOnce normalized.2 modulus
+  let split := normalizeCoefficient coefficient modulus
+  let low := fromMont split.low modulus inv
+  let high1 := reduceOnce split.high modulus
   let high2 := reduceOnce high1 modulus
   let high := reduceOnce high2 modulus
   let out := addMod low high modulus
-  obtain ⟨hnormalizedLow, hnormalizedHighBound, hnormalizedValue, _⟩ :=
-    normalizeCoefficient_schedule_spec coefficient modulus hcoefficientBound hm hp hlower hupper
+  obtain ⟨hsplitLow, hsplitHighBound, hsplitValue, _⟩ :=
+    normalizeCoefficient_spec coefficient modulus hcoefficientBound hm hshape hp hlower hupper
+      split rfl
   obtain ⟨hlowBound, hlowLt, hlowMod⟩ :=
-    fromMont_spec normalized.1 modulus inv
-      (by rw [hnormalizedLow]; exact ⟨hcoefficientBound.1, hcoefficientBound.2.1,
+    fromMont_spec split.low modulus inv
+      (by rw [hsplitLow]; exact ⟨hcoefficientBound.1, hcoefficientBound.2.1,
         hcoefficientBound.2.2.1, hcoefficientBound.2.2.2.1⟩)
       hm hshape hinvLt hinv low rfl
   obtain ⟨hhighBound, hhighLt, hhighMod⟩ :=
-    reduceThree_spec normalized.2 modulus hnormalizedHighBound hm hshape
+    reduceThree_spec split.high modulus hsplitHighBound hm hshape
   obtain ⟨houtBound, houtLt, houtMod⟩ :=
     addMod_spec_of_lt low high modulus hlowBound hhighBound hm hshape hlowLt hhighLt out rfl
   have hnormalizedNonneg : 0 ≤ normalize modulus.toNat coefficient.toInt :=
@@ -523,22 +734,22 @@ theorem invertEpilogue_spec
     exact Int.natCast_modEq_iff.mp (by
       simpa only [Int.natCast_mul, Int.natCast_pow] using hnormalizedProductInt)
   have hsplitMod : R * (low.toNat + high.toNat) ≡
-      normalized.1.toNat + R * normalized.2.toNat [MOD modulus.toNat] := by
+      split.low.toNat + R * split.high.toNat [MOD modulus.toNat] := by
     calc
       R * (low.toNat + high.toNat) = R * low.toNat + R * high.toNat := by ring
-      _ ≡ normalized.1.toNat + R * high.toNat [MOD modulus.toNat] :=
+      _ ≡ split.low.toNat + R * high.toNat [MOD modulus.toNat] :=
         hlowMod.add_right (R * high.toNat)
-      _ ≡ normalized.1.toNat + R * normalized.2.toNat [MOD modulus.toNat] :=
-        Nat.ModEq.add_left normalized.1.toNat (Nat.ModEq.mul_left R hhighMod)
-  have hnormalizedEq : normalized.1.toNat + R * normalized.2.toNat =
+      _ ≡ split.low.toNat + R * split.high.toNat [MOD modulus.toNat] :=
+        Nat.ModEq.add_left split.low.toNat (Nat.ModEq.mul_left R hhighMod)
+  have hnormalizedEq : split.low.toNat + R * split.high.toNat =
       (normalize modulus.toNat coefficient.toInt).toNat := by
-    simpa only [R, splitRadix] using hnormalizedValue
+    simpa only [R, splitRadix] using hsplitValue
   have houtScaled : R * out.toNat ≡
       (normalize modulus.toNat coefficient.toInt).toNat [MOD modulus.toNat] := by
     calc
       R * out.toNat ≡ R * (low.toNat + high.toNat) [MOD modulus.toNat] :=
         Nat.ModEq.mul_left R houtMod
-      _ ≡ normalized.1.toNat + R * normalized.2.toNat [MOD modulus.toNat] := hsplitMod
+      _ ≡ split.low.toNat + R * split.high.toNat [MOD modulus.toNat] := hsplitMod
       _ = (normalize modulus.toNat coefficient.toInt).toNat := hnormalizedEq
   have hleft : R * (out.toNat * converted) ≡ R^2 [MOD modulus.toNat] := by
     calc
@@ -560,4 +771,4 @@ theorem IsInversionField.pastaSizedOdd {F : PastaField} (hF : IsInversionField F
     refine ⟨Nat.odd_iff.mpr (by decide), ?_, ?_⟩ <;>
     norm_num [pallasBase, vestaBase, Limbs.toNat]
 
-end PastaAsm.X86_64
+end PastaAsm.AArch64

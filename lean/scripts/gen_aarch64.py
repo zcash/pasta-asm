@@ -816,6 +816,308 @@ def emit_straight_invert(source, config, block=None):
     )
 
 
+MUL_SIGNED_PREPARE_RANGE = (0, 20)
+MUL_SIGNED_FIRST_RANGE = (21, 22)
+MUL_SIGNED_ROUND_RANGES = tuple((23 + 4 * index, 26 + 4 * index) for index in range(7))
+MUL_SIGNED_LAST_RANGE = (51, 52)
+MUL_SIGNED_PHASE_OPS = {
+    "prepare": ("asr", "eor", "sub") + ("eor",) * 9 + ("adds",) + ("adcs",) * 7 + ("adc",),
+    "first": ("umulh", "mul"),
+    "round": ("umulh", "mul", "adds", "adc"),
+    "last": ("mul", "add"),
+}
+
+
+def _pc_entries(emitter, pc_range):
+    first, last = pc_range
+    return [dict(entry) for entry in emitter.entries
+            if entry["pc"] is not None and first <= entry["pc"] <= last]
+
+
+def _rename_mul_signed_limb(value, source_limb):
+    """Normalize one unrolled product round's source limb in binding-IR values."""
+    if isinstance(value, str):
+        return re.sub(rf"(?<![A-Za-z0-9_']){re.escape(source_limb)}(?![A-Za-z0-9_'])",
+                      "limb", value)
+    if isinstance(value, tuple):
+        return tuple(_rename_mul_signed_limb(item, source_limb) for item in value)
+    return value
+
+
+def mul_signed_round_fingerprint(emitter, pc_range, source_limb):
+    """Architecture-normalized binding-IR fingerprint for an unrolled product round."""
+    first, _last = pc_range
+    fingerprint = []
+    for entry in _pc_entries(emitter, pc_range):
+        fingerprint.append((
+            entry["pc"] - first,
+            _rename_mul_signed_limb(entry["name"], source_limb),
+            _rename_mul_signed_limb(entry["expr"], source_limb),
+            tuple(sorted(_rename_mul_signed_limb(read, source_limb)
+                         for read in entry["reads"])),
+            entry["load"],
+            _rename_mul_signed_limb(entry["fact"], source_limb),
+            _rename_mul_signed_limb(entry["comment"], source_limb),
+            _rename_mul_signed_limb(entry.get("note"), source_limb)
+            if entry.get("note") is not None else None,
+        ))
+    return tuple(fingerprint)
+
+
+def _phase_live_in(entries):
+    bound, live_in = set(), set()
+    for entry in entries:
+        live_in.update(read for read in entry["reads"] if read not in bound)
+        bound.add(entry["name"])
+    return live_in
+
+
+def _phase_live_out(all_entries, pc_range, final_outputs):
+    """Registers written in a phase whose values cross its trailing source boundary."""
+    first, last = pc_range
+    written = {entry["name"] for entry in all_entries
+               if entry["pc"] is not None and first <= entry["pc"] <= last}
+    rebound, live_out = set(), set()
+    for entry in all_entries:
+        if entry["pc"] is None or entry["pc"] <= last:
+            continue
+        live_out.update(read for read in entry["reads"]
+                        if read in written and read not in rebound)
+        rebound.add(entry["name"])
+    live_out.update(register for register in final_outputs
+                    if register in written and register not in rebound)
+    return live_out
+
+
+def _validate_mul_signed_factoring(routine, ins):
+    """Fail closed unless the source has the supported contiguous phase boundaries."""
+    ranges = (MUL_SIGNED_PREPARE_RANGE, MUL_SIGNED_FIRST_RANGE,
+              *MUL_SIGNED_ROUND_RANGES, MUL_SIGNED_LAST_RANGE)
+    covered = [pc for first, last in ranges for pc in range(first, last + 1)]
+    if len(covered) != len(set(covered)) or set(covered) != set(range(len(ins))):
+        raise ValueError(
+            "mul_signed: factored phase ranges do not cover the source instruction stream"
+        )
+    emitted = {entry["pc"] for entry in routine.emitter.entries if entry["pc"] is not None}
+    if emitted != set(covered):
+        raise ValueError("mul_signed: binding IR does not cover every source instruction")
+
+    phase_ranges = {
+        "prepare": MUL_SIGNED_PREPARE_RANGE,
+        "first": MUL_SIGNED_FIRST_RANGE,
+        "round": MUL_SIGNED_ROUND_RANGES[0],
+        "last": MUL_SIGNED_LAST_RANGE,
+    }
+    for phase, pc_range in phase_ranges.items():
+        first, last = pc_range
+        actual = tuple(ins[pc][0] for pc in range(first, last + 1))
+        if actual != MUL_SIGNED_PHASE_OPS[phase]:
+            raise ValueError(
+                f"mul_signed: unsupported {phase} phase opcode fingerprint {actual}"
+            )
+
+    reference = mul_signed_round_fingerprint(
+        routine.emitter, MUL_SIGNED_ROUND_RANGES[0], "o1"
+    )
+    for index, pc_range in enumerate(MUL_SIGNED_ROUND_RANGES[1:], start=2):
+        fingerprint = mul_signed_round_fingerprint(routine.emitter, pc_range, f"o{index}")
+        if not reference or fingerprint != reference:
+            raise ValueError(
+                "mul_signed: product rounds differ after source-limb normalization"
+            )
+
+    expected_boundaries = [
+        (MUL_SIGNED_PREPARE_RANGE,
+         {"scalar", *(f"o{index}" for index in range(9))},
+         {"mag", *(f"o{index}" for index in range(9))}),
+        (MUL_SIGNED_FIRST_RANGE, {"o0", "mag"}, {"o0", "carry"}),
+        *((pc_range, {f"o{index}", "mag", "carry"},
+           {f"o{index}", "carry"})
+          for index, pc_range in enumerate(MUL_SIGNED_ROUND_RANGES, start=1)),
+        (MUL_SIGNED_LAST_RANGE, {"o8", "mag", "carry"}, {"o8"}),
+    ]
+    for pc_range, expected_in, expected_out in expected_boundaries:
+        entries = _pc_entries(routine.emitter, pc_range)
+        actual = (_phase_live_in(entries),
+                  _phase_live_out(routine.emitter.entries, pc_range, routine.result_names))
+        if actual != (expected_in, expected_out):
+            raise ValueError(
+                f"mul_signed: source boundary {pc_range} has live contract {actual}, "
+                f"expected {(expected_in, expected_out)}"
+            )
+
+
+MUL_SIGNED_STRUCTURES = """/-- The magnitude and conditionally negated limbs produced by the first contiguous source phase of
+`mulSigned`. -/
+structure MulSignedPrepared where
+  l0 : Nat
+  l1 : Nat
+  l2 : Nat
+  l3 : Nat
+  l4 : Nat
+  l5 : Nat
+  l6 : Nat
+  l7 : Nat
+  l8 : Nat
+  magnitude : Nat
+  deriving DecidableEq, Repr
+
+namespace MulSignedPrepared
+
+/-- The register bounds supplied by a proof of the prepare/sign-negation phase. -/
+def Bounded (s : MulSignedPrepared) : Prop :=
+  s.l0 < 2^64 ∧ s.l1 < 2^64 ∧ s.l2 < 2^64 ∧ s.l3 < 2^64 ∧ s.l4 < 2^64 ∧
+  s.l5 < 2^64 ∧ s.l6 < 2^64 ∧ s.l7 < 2^64 ∧ s.l8 < 2^64 ∧ s.magnitude < 2^64
+
+end MulSignedPrepared
+
+/-- The low product limb and carry produced by a non-final contiguous product phase of
+`mulSigned`. -/
+structure MulSignedProduct where
+  low : Nat
+  carry : Nat
+  deriving DecidableEq, Repr
+
+namespace MulSignedProduct
+
+/-- The register bounds supplied by each non-final product-phase proof. -/
+def Bounded (s : MulSignedProduct) : Prop :=
+  s.low < 2^64 ∧ s.carry < 2^64
+
+end MulSignedProduct
+
+/-- The low limb produced by the final contiguous product phase of `mulSigned`. -/
+structure MulSignedLastProduct where
+  low : Nat
+  deriving DecidableEq, Repr
+
+namespace MulSignedLastProduct
+
+/-- The register bound supplied by the final product-phase proof. -/
+def Bounded (s : MulSignedLastProduct) : Prop :=
+  s.low < 2^64
+
+end MulSignedLastProduct
+"""
+
+
+def _mul_signed_phase_routine(ins, directions, name, signature, bindings, entries,
+                              results, result, doc, struct=None):
+    emitter = Emitter(ins, directions)
+    for register, parameter in bindings:
+        emitter.bind(register, parameter, "phase argument", reads=(),
+                     fact=("param", parameter))
+    emitter.entries.extend(dict(entry) for entry in entries)
+    emitter.known.update(entry["name"] for entry in emitter.entries)
+    return Routine(
+        doc, signature, emitter.render(results), result, name, emitter, results, struct=struct,
+    )
+
+
+def _append_helper_call(emitter, name, fmt, args, comment):
+    emitter.entries.append(dict(
+        name=name, expr=fmt.format(*args), comment=comment, note=None,
+        reads=set(args), load=False, fact=("call", fmt, list(args)), pc=None,
+    ))
+
+
+def _append_helper_outputs(emitter, callee, outputs, comment):
+    for register, field in outputs:
+        emitter.entries.append(dict(
+            name=register, expr=f"{callee}.{field}", comment=comment, note=None,
+            reads={callee}, load=False, fact=("callout", callee, field), pc=None,
+        ))
+
+
+def emit_mul_signed(source, config):
+    """Mechanically factor ``mul_signed`` into contiguous source-derived proof phases."""
+    block = parse_invert_helper(source, config)
+    ins = instruction_ir(block.instructions)
+    flattened = emit_straight_invert(source, config, block)
+    _validate_mul_signed_factoring(flattened, ins)
+    directions = {declaration.name: declaration.kind for declaration in block.declarations}
+
+    prepare_results = [*(f"o{index}" for index in range(9)), "mag"]
+    prepare_emitter = Emitter(ins, directions)
+    prepare_emitter.entries = [
+        dict(entry) for entry in flattened.emitter.entries
+        if entry["pc"] is None or MUL_SIGNED_PREPARE_RANGE[0] <= entry["pc"] <= MUL_SIGNED_PREPARE_RANGE[1]
+    ]
+    prepare_emitter.known.update(entry["name"] for entry in prepare_emitter.entries)
+    prepare = Routine(
+        "The contiguous scalar-magnitude and conditional-negation phase of `mulSigned`, copied "
+        "from source PCs 0 through 20.",
+        "def mulSignedPrepare (value : WideLimbs) (scalar : Nat) : MulSignedPrepared :=",
+        prepare_emitter.render(prepare_results),
+        "  ⟨" + ", ".join(prepare_results) + "⟩",
+        "mulSignedPrepare", prepare_emitter, prepare_results, struct=MUL_SIGNED_STRUCTURES,
+        arg_fields=invert_arg_fields(config),
+    )
+
+    first = _mul_signed_phase_routine(
+        ins, directions, "mulSignedFirst",
+        "def mulSignedFirst (limb magnitude : Nat) : MulSignedProduct :=",
+        (("o0", "limb"), ("mag", "magnitude")),
+        _pc_entries(flattened.emitter, MUL_SIGNED_FIRST_RANGE),
+        ["o0", "carry"], "  ⟨o0, carry⟩",
+        "The first contiguous product phase of `mulSigned`: multiply limb zero and retain its "
+        "high word as the carry.",
+    )
+    round_ = _mul_signed_phase_routine(
+        ins, directions, "mulSignedRound",
+        "def mulSignedRound (limb magnitude productCarry : Nat) : MulSignedProduct :=",
+        (("o1", "limb"), ("mag", "magnitude"), ("carry", "productCarry")),
+        _pc_entries(flattened.emitter, MUL_SIGNED_ROUND_RANGES[0]),
+        ["o1", "carry"], "  ⟨o1, carry⟩",
+        "One middle contiguous product phase of `mulSigned`. All seven unrolled source phases "
+        "are checked to have this binding IR after source-limb normalization.",
+    )
+    last = _mul_signed_phase_routine(
+        ins, directions, "mulSignedLast",
+        "def mulSignedLast (limb magnitude productCarry : Nat) : MulSignedLastProduct :=",
+        (("o8", "limb"), ("mag", "magnitude"), ("carry", "productCarry")),
+        _pc_entries(flattened.emitter, MUL_SIGNED_LAST_RANGE),
+        ["o8"], "  ⟨o8⟩",
+        "The final contiguous product phase of `mulSigned`, with overflow above bit 575 "
+        "discarded exactly as in the source.",
+    )
+
+    wrapper = Emitter(ins, directions)
+    _append_helper_call(wrapper, "prepared", "mulSignedPrepare {0} {1}",
+                        ["value", "scalar"], "factored prepare/sign-negation phase")
+    _append_helper_outputs(
+        wrapper, "prepared",
+        [(f"o{index}", f"l{index}") for index in range(9)] + [("mag", "magnitude")],
+        "prepare/sign-negation phase output",
+    )
+    _append_helper_call(wrapper, "firstProduct", "mulSignedFirst {0} {1}",
+                        ["o0", "mag"], "factored first product phase")
+    _append_helper_outputs(wrapper, "firstProduct", (("o0", "low"), ("carry", "carry")),
+                           "first product phase output")
+    for index in range(1, 8):
+        call_name = f"round{index}"
+        _append_helper_call(wrapper, call_name, "mulSignedRound {0} {1} {2}",
+                            [f"o{index}", "mag", "carry"],
+                            f"factored product round {index}")
+        _append_helper_outputs(wrapper, call_name,
+                               ((f"o{index}", "low"), ("carry", "carry")),
+                               f"product round {index} output")
+    _append_helper_call(wrapper, "lastProduct", "mulSignedLast {0} {1} {2}",
+                        ["o8", "mag", "carry"], "factored final product phase")
+    wrapper.entries.append(dict(
+        name="o8", expr="lastProduct.low", comment="final product phase output", note=None,
+        reads={"lastProduct"}, load=False, fact=("callout", "lastProduct", "low"), pc=None,
+    ))
+    wrapper.known.update(entry["name"] for entry in wrapper.entries)
+    outputs = [f"o{index}" for index in range(9)]
+    main = Routine(
+        config.doc, helper_signature(config), wrapper.render(outputs),
+        invert_result(config, outputs), config.lean_name, wrapper, outputs,
+        arg_fields=invert_arg_fields(config),
+    )
+    return [prepare, first, round_, last, main]
+
+
 def loop_boundaries(ins, config):
     labels = [index for index, (op, _tokens, text) in enumerate(ins)
               if op.endswith(":") and text == "2:"]
@@ -997,6 +1299,27 @@ class SkeletonBackend(gen.SkeletonBackend):
         # With let merging disabled, source-SSA wrappers also retain every binding.
         entries = [dict(entry) for entry in entries]
         names = gen.ssa_names(entries)
+
+        # Shifted register operands are stored as one fact string (for example
+        # ``(lsr sign 63)``), so the shared skeleton walk cannot rename the
+        # register nested inside them. Resolve just those operands against the
+        # same current SSA history before grouping instruction results.
+        current = {}
+        for entry, name in zip(entries, names):
+            fact = entry["fact"]
+            rewritten = [fact[0]]
+            for operand in fact[1:]:
+                shifted = re.fullmatch(
+                    r"\((lsl|lsr|asr) ([A-Za-z_][A-Za-z0-9_']*) ([0-9]+)\)",
+                    str(operand),
+                )
+                if shifted:
+                    operation, register, amount = shifted.groups()
+                    operand = f"({operation} {current.get(register, register)} {amount})"
+                rewritten.append(operand)
+            entry["fact"] = tuple(rewritten)
+            current[entry["name"]] = name
+
         i = 0
         while i < len(entries):
             kind = entries[i]["fact"][0]
@@ -1185,7 +1508,9 @@ def all_routines():
         routines += emit_inline(fn, name, doc, args)
     invert_source = INVERT.read_text()
     for config in INVERT_ROUTINES:
-        if config.loop_count is None:
+        if config.rust_name == "mul_signed":
+            routines += emit_mul_signed(invert_source, config)
+        elif config.loop_count is None:
             routines.append(emit_straight_invert(invert_source, config))
         else:
             routines += emit_loop_invert(invert_source, config)

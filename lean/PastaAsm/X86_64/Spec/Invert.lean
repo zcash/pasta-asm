@@ -18,7 +18,7 @@ without changing the public contract or assuming internal convergence/bounds.
 
 namespace PastaAsm.X86_64
 
-open Spec.Invert Spec.Invert.Convergence Spec.Invert.Normalize
+open Spec.Invert Spec.Invert.Convergence Spec.Invert.Normalize Spec.Invert.Schedule
 
 set_option maxRecDepth 2000
 

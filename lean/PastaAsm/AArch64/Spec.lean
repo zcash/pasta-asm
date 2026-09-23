@@ -6,6 +6,9 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 import PastaAsm.AArch64.Spec.Add
 import PastaAsm.AArch64.Spec.Invert
 import PastaAsm.AArch64.Spec.Invert.Arithmetic
+import PastaAsm.AArch64.Spec.Invert.Multiply
+import PastaAsm.AArch64.Spec.Invert.Update
+import PastaAsm.AArch64.Spec.Invert.Normalize
 import PastaAsm.AArch64.Spec.Invert.Divsteps.Round47
 import PastaAsm.AArch64.Spec.Invert.Divsteps.Round31
 import PastaAsm.AArch64.Spec.Invert.Divsteps.Steps47

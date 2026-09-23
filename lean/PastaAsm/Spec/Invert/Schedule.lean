@@ -3,17 +3,16 @@ Copyright (c) 2026 the pasta-asm contributors.
 Released under the Apache License, Version 2.0, as described in the file LICENSE.
 -/
 import PastaAsm.Spec.Invert.Batch
-import PastaAsm.X86_64.Compositions
 
 /-!
-# Compact relation iterator for the x86-64 inversion schedule
+# Compact relation iterator shared by both inversion schedules
 
 The induction kernels in this module are entirely generic.  The generated
 Semolina computation occurs only behind the one-edge `BatchRel` adapter, never
 in an induction motive.
 -/
 
-namespace PastaAsm.X86_64
+namespace PastaAsm.Spec.Invert.Schedule
 
 open Spec.Invert Spec.Invert.Convergence
 
@@ -284,7 +283,7 @@ theorem batchSchedule_preserves_invariant {n : Nat} {before after : BatchPoint}
   | zero point => simpa using hinvariant
   | @succ n first next finish edge tail ih =>
       rcases edge with ⟨view, hvalues, hcoeff⟩
-      have hone := (PastaAsm.X86_64.SemolinaBatchView.scaledTransition view).preserves_invariant
+      have hone := (Spec.Invert.Schedule.SemolinaBatchView.scaledTransition view).preserves_invariant
         hinvariant
       have hnext : CoeffInvariant modulus input (scale * 2^31)
           ⟨next.values.1, next.values.2⟩ next.coeff := by
@@ -337,4 +336,4 @@ theorem schedule_identity_final_coefficient_invariant
       simp [initialCoefficients]
   exact schedule_transition_final_coefficient_invariant schedule hinitial htransition hafter
 
-end PastaAsm.X86_64
+end PastaAsm.Spec.Invert.Schedule
