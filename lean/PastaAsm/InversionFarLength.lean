@@ -21,7 +21,7 @@ open InversionSpec
 
 /-- The value pair of the approximation iterator follows `exactSteps` on its
 own approximate controls.  This says nothing about the full-width inputs. -/
-private theorem approxSteps_value_pair (t : Nat) (s : ApproxState) :
+theorem approxSteps_value_pair (t : Nat) (s : ApproxState) :
     ((approxSteps t s).a, (approxSteps t s).b) = exactSteps t (s.a, s.b) := by
   induction t generalizing s with
   | zero => rfl

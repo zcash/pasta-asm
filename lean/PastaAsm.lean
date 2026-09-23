@@ -6,9 +6,11 @@ import PastaAsm.Semantics
 import PastaAsm.Inversion
 import PastaAsm.InversionSpec
 import PastaAsm.InversionConvergence
+import PastaAsm.InversionBatch
 import PastaAsm.InversionRegularPrefix
 import PastaAsm.InversionDivergenceBoundary
 import PastaAsm.InversionFarLength
+import PastaAsm.InversionNearLength
 import PastaAsm.InversionNormalization
 import PastaAsm.Fields
 import PastaAsm.InversionFields
