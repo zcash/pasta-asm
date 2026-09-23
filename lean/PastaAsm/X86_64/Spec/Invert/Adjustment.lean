@@ -539,4 +539,50 @@ theorem updateAbShift_spec (value : PastaAsm.WideLimbs) (f g : Nat) (hv : value.
   · rfl
   -- END updateAbShift_spec conclusion
 
+/-- Three applications of the epilogue reduction helper reduce any bounded four-limb
+value to a canonical Pasta residue. Each application preserves the residue modulo the
+field modulus. -/
+theorem reduceThree_spec (value modulus : Limbs) (hv : value.Bounded)
+    (hm : modulus.Bounded) (hshape : modulus.l2 = 0 ∧ modulus.l3 = 2^62) :
+    let high1 := reduceOnce value modulus
+    let high2 := reduceOnce high1 modulus
+    let high := reduceOnce high2 modulus
+    high.Bounded ∧ high.toNat < modulus.toNat ∧
+      high.toNat ≡ value.toNat [MOD modulus.toNat] := by
+  dsimp only
+  let high1 := reduceOnce value modulus
+  let high2 := reduceOnce high1 modulus
+  let high := reduceOnce high2 modulus
+  obtain ⟨hhigh1, hcases1⟩ := reduceOnce_spec value modulus hv hm hshape.1 high1 rfl
+  obtain ⟨hhigh2, hcases2⟩ := reduceOnce_spec high1 modulus hhigh1 hm hshape.1 high2 rfl
+  obtain ⟨hhigh, hcases3⟩ := reduceOnce_spec high2 modulus hhigh2 hm hshape.1 high rfl
+  have hmod1 : high1.toNat ≡ value.toNat [MOD modulus.toNat] := by
+    rcases hcases1 with ⟨_, heq⟩ | ⟨_, heq⟩
+    · exact modEq_of_add_mul _ _ 0 0 _ (by omega)
+    · exact modEq_of_add_mul _ _ 1 0 _ (by omega)
+  have hmod2 : high2.toNat ≡ high1.toNat [MOD modulus.toNat] := by
+    rcases hcases2 with ⟨_, heq⟩ | ⟨_, heq⟩
+    · exact modEq_of_add_mul _ _ 0 0 _ (by omega)
+    · exact modEq_of_add_mul _ _ 1 0 _ (by omega)
+  have hmod3 : high.toNat ≡ high2.toNat [MOD modulus.toNat] := by
+    rcases hcases3 with ⟨_, heq⟩ | ⟨_, heq⟩
+    · exact modEq_of_add_mul _ _ 0 0 _ (by omega)
+    · exact modEq_of_add_mul _ _ 1 0 _ (by omega)
+  have hpLower : 2^254 ≤ modulus.toNat := by
+    calc
+      2^254 = 2^192 * 2^62 := by norm_num [pow_add]
+      _ ≤ modulus.toNat := by
+        simp only [Limbs.toNat, hshape.1, hshape.2, mul_zero, add_zero]
+        omega
+  have hvalueLt : value.toNat < 4 * modulus.toNat := by
+    apply lt_of_lt_of_le (Limbs.toNat_lt value hv)
+    calc
+      2^256 = 4 * 2^254 := by norm_num [pow_add]
+      _ ≤ 4 * modulus.toNat := Nat.mul_le_mul_left 4 hpLower
+  refine ⟨hhigh, ?_, hmod3.trans (hmod2.trans hmod1)⟩
+  change high.toNat < modulus.toNat
+  rcases hcases1 with ⟨h1lt, h1eq⟩ | ⟨h1ge, h1eq⟩ <;>
+    rcases hcases2 with ⟨h2lt, h2eq⟩ | ⟨h2ge, h2eq⟩ <;>
+      rcases hcases3 with ⟨h3lt, h3eq⟩ | ⟨h3ge, h3eq⟩ <;> omega
+
 end PastaAsm.X86_64
