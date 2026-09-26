@@ -9,25 +9,28 @@
 //!
 //! # Availability
 //!
-//! The crate provides a backend for `target_arch = "aarch64"` and, in part,
-//! for `target_arch = "x86_64"`. On x86-64, `add`, `sub`, and `from_mont`
-//! are register-only. `mul`, `square`, and the routines built on them read
-//! limbs through pointers, so they require 64-bit pointers; the x32 ABI's
-//! 32-bit pointers would break them (see the module docs for why registers
-//! alone cannot serve there). They also need, at run time, a CPU with BMI2
-//! and ADX (MULX, ADCX/ADOX: Intel Broadwell / AMD Zen or newer); neither
-//! is checked. `from_mont` uses MULX (BMI2) alone. Apple x86-64 targets are
-//! excluded altogether: they reserve `rbp`, and so have fewer available
-//! registers than the squaring blocks need.
+//! The crate provides a backend for `target_arch = "aarch64"`, and for
+//! `target_arch = "x86_64"` with 64-bit pointers. On x86-64, `add`, `sub`,
+//! and `from_mont` are register-only, while `mul`, `square`, and the
+//! routines built on them read limbs through pointers; the x32 ABI's 32-bit
+//! pointers would break them (see the module docs for why registers alone
+//! cannot serve there), so the crate is empty on that target. They also
+//! need, at run time, a CPU with BMI2 and ADX (MULX, ADCX/ADOX: Intel
+//! Broadwell / AMD Zen or newer); neither is checked. `from_mont` uses MULX
+//! (BMI2) alone. Apple x86-64 targets are excluded altogether: they reserve
+//! `rbp`, and so have fewer available registers than the squaring blocks
+//! need.
 //!
-//! On every other target the crate is empty. It is also empty, on any
-//! target, when the compiler is passed `--cfg pasta_asm_disable` (through
-//! `RUSTFLAGS`, or `rustflags` in `.cargo/config.toml`), which is how to
-//! build for old x86-64 CPUs without BMI2 and ADX. A consumer does not
-//! repeat these conditions: it declares its uses of the crate under
-//! [`if_supported!`] and its portable fallback under [`if_unsupported!`];
-//! the first expands to its items exactly where the crate has a backend,
-//! and the second exactly where it does not. [`BACKEND`] names the result.
+//! On every other target, that is any target other than AArch64 and
+//! non-Apple x86-64 with 64-bit pointers, the crate is empty. It is also
+//! empty, on any target, when the compiler is passed
+//! `--cfg pasta_asm_disable` (through `RUSTFLAGS`, or `rustflags` in
+//! `.cargo/config.toml`), which is how to build for old x86-64 CPUs without
+//! BMI2 and ADX. A consumer does not repeat these conditions: it declares
+//! its uses of the crate under [`if_supported!`] and its portable fallback
+//! under [`if_unsupported!`]; the first expands to its items exactly where
+//! the crate has a backend, and the second exactly where it does not.
+//! [`BACKEND`] names the result.
 //!
 //! ```
 //! mod portable {
@@ -80,11 +83,19 @@
 #[macro_export]
 macro_rules! if_supported {
     ($($item:item)*) => { $(
-        // Apple x86-64 targets reserve `rbp`, and so have fewer available registers than the
-        // squaring blocks need.
+        // The x86-64 multiplication family addresses limbs through pointers, so the backend needs
+        // 64-bit pointers; and Apple x86-64 targets reserve `rbp`, and so have fewer available
+        // registers than the squaring blocks need.
         #[cfg(all(
             not(pasta_asm_disable),
-            any(target_arch = "aarch64", all(target_arch = "x86_64", not(target_vendor = "apple")))
+            any(
+                target_arch = "aarch64",
+                all(
+                    target_arch = "x86_64",
+                    target_pointer_width = "64",
+                    not(target_vendor = "apple")
+                )
+            )
         ))]
         $item
     )* };
@@ -97,7 +108,14 @@ macro_rules! if_unsupported {
     ($($item:item)*) => { $(
         #[cfg(not(all(
             not(pasta_asm_disable),
-            any(target_arch = "aarch64", all(target_arch = "x86_64", not(target_vendor = "apple")))
+            any(
+                target_arch = "aarch64",
+                all(
+                    target_arch = "x86_64",
+                    target_pointer_width = "64",
+                    not(target_vendor = "apple")
+                )
+            )
         )))]
         $item
     )* };
