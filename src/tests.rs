@@ -19,6 +19,12 @@ use super::{Limbs, add, from_mont, sub};
 ))]
 use super::{mul, sqr_n_mul, square};
 
+#[test]
+fn backend_name() {
+    let expected = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86-64" };
+    assert_eq!(super::BACKEND, expected);
+}
+
 /// One field's constants and known answers.
 struct Field {
     modulus: Limbs,

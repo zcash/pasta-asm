@@ -2,15 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![no_std]
-// We cannot build the assembly on Apple x86-64 targets because they reserve
-// `rbp`, and so have fewer available registers than the squaring blocks need.
-// So the crate is empty on those targets, as on every other target without a
-// backend.
-#![cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", not(target_vendor = "apple")),
-    doc
-))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
@@ -27,11 +18,50 @@
 //! and ADX (MULX, ADCX/ADOX: Intel Broadwell / AMD Zen or newer); neither
 //! is checked. `from_mont` uses MULX (BMI2) alone. Apple x86-64 targets are
 //! excluded altogether: they reserve `rbp`, and so have fewer available
-//! registers than the squaring blocks need. On every other target this
-//! crate is empty, so a consumer gates its use on the same `cfg` and falls
-//! back to portable arithmetic elsewhere. Nothing is assembled at build
-//! time: the blocks are compiled by the Rust toolchain, so no C toolchain
-//! is needed, and the crate is `no_std` with no dependencies.
+//! registers than the squaring blocks need.
+//!
+//! On every other target the crate is empty. It is also empty, on any
+//! target, when the compiler is passed `--cfg pasta_asm_disable` (through
+//! `RUSTFLAGS`, or `rustflags` in `.cargo/config.toml`), which is how to
+//! build for old x86-64 CPUs without BMI2 and ADX. A consumer does not
+//! repeat these conditions: it declares its uses of the crate under
+//! [`if_supported!`] and its portable fallback under [`if_unsupported!`];
+//! the first expands to its items exactly where the crate has a backend,
+//! and the second exactly where it does not. [`BACKEND`] names the result.
+//!
+//! ```
+//! mod portable {
+//!     pub fn add(lhs: &[u64; 4], rhs: &[u64; 4], _modulus: &[u64; 4]) -> [u64; 4] {
+//!         // A stand-in for the consumer's arithmetic that only has to work for the example.
+//!         [lhs[0] + rhs[0], lhs[1] + rhs[1], lhs[2] + rhs[2], lhs[3] + rhs[3]]
+//!     }
+//! }
+//! pasta_asm::if_supported! { use pasta_asm::add; }
+//! pasta_asm::if_unsupported! { use portable::add; }
+//!
+//! let one = [1, 0, 0, 0];
+//! let pallas = [0x992d30ed00000001, 0x224698fc094cf91b, 0, 0x4000000000000000];
+//! let two = add(&one, &one, &pallas);
+//! assert!(two == [2, 0, 0, 0]);
+//! ```
+//!
+//! Two things follow for a direct consumer. The expansion is checked in the
+//! consumer's crate, so the consumer declares the cfg as expected, in its
+//! `Cargo.toml`:
+//!
+//! ```toml
+//! [lints.rust]
+//! unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pasta_asm_disable)'] }
+//! ```
+//!
+//! And a build that sets the flag sets it for rustdoc too (`RUSTDOCFLAGS`):
+//! `cargo test` and `cargo doc` run rustdoc over the consumer's crate, which
+//! expands the macros under rustdoc's flags, and against a crate built with
+//! the flag the supported arm does not resolve.
+//!
+//! Nothing is assembled at build time: the blocks are compiled by the Rust
+//! toolchain, so no C toolchain is needed, and the crate is `no_std` with
+//! no dependencies.
 //!
 //! # Provenance and license
 //!
@@ -42,230 +72,62 @@
 //!
 //! [Semolina]: https://github.com/supranational/semolina
 
-#[cfg(any(target_arch = "aarch64", doc))]
-mod aarch64;
-
-#[cfg(any(target_arch = "x86_64", doc))]
-mod x86_64;
-
-// The tests use std only to catch the debug assertions they check, so a release test build
-// stays free of it.
-#[cfg(all(test, debug_assertions))]
-extern crate std;
-
-#[cfg(test)]
-mod tests;
-
-/// Four little-endian 64-bit limbs, least significant first: a field element
-/// (in Montgomery form, or canonical after [`from_mont`]) or a modulus.
-pub type Limbs = [u64; 4];
-
-/// Whether `value < modulus` as little-endian 256-bit integers.
-#[inline(always)]
-fn is_canonical(value: &Limbs, modulus: &Limbs) -> bool {
-    for i in (0..4).rev() {
-        if value[i] != modulus[i] {
-            return value[i] < modulus[i];
-        }
-    }
-    false
+/// Declares the items only where this crate has a backend.
+///
+/// The expansion carries the crate's own condition, the target and the absence of
+/// `--cfg pasta_asm_disable`, so a consumer routes its arithmetic through the crate without
+/// repeating it. The items are `use`s, functions, modules, or anything else in item position.
+#[macro_export]
+macro_rules! if_supported {
+    ($($item:item)*) => { $(
+        // Apple x86-64 targets reserve `rbp`, and so have fewer available registers than the
+        // squaring blocks need.
+        #[cfg(all(
+            not(pasta_asm_disable),
+            any(target_arch = "aarch64", all(target_arch = "x86_64", not(target_vendor = "apple")))
+        ))]
+        $item
+    )* };
 }
 
-/// Adds two residues for a Pasta modulus and conditionally subtracts the modulus.
-///
-/// Outputs are canonical.
-///
-/// # Safety
-///
-/// Both inputs must be canonical. This is debug-asserted, and under it the machine-checked
-/// proofs in `lean/` establish the result (`add_entry_spec`).
-///
-/// `modulus` must be either the Pallas or Vesta field modulus. Any other values will
-/// cause undefined results.
-#[inline(always)]
-pub fn add(lhs: &Limbs, rhs: &Limbs, modulus: &Limbs) -> Limbs {
-    debug_assert!(
-        is_canonical(lhs, modulus),
-        "pasta_asm::add requires a canonical lhs"
-    );
-    debug_assert!(
-        is_canonical(rhs, modulus),
-        "pasta_asm::add requires a canonical rhs"
-    );
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        crate::aarch64::add(lhs, rhs, modulus)
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        crate::x86_64::add(lhs, rhs, modulus)
-    }
+/// Declares the items only where this crate has no backend: the complement of
+/// [`if_supported!`], for a consumer's portable fallback.
+#[macro_export]
+macro_rules! if_unsupported {
+    ($($item:item)*) => { $(
+        #[cfg(not(all(
+            not(pasta_asm_disable),
+            any(target_arch = "aarch64", all(target_arch = "x86_64", not(target_vendor = "apple")))
+        )))]
+        $item
+    )* };
 }
 
-/// Subtracts two residues for a Pasta modulus, adding the modulus back on underflow.
-///
-/// Outputs are canonical.
-///
-/// # Safety
-///
-/// Both inputs must be canonical. This is debug-asserted, and under it the machine-checked
-/// proofs in `lean/` establish the result (`sub_entry_spec`).
-///
-/// `modulus` must be either the Pallas or Vesta field modulus. Any other values will
-/// cause undefined results.
-#[inline(always)]
-pub fn sub(lhs: &Limbs, rhs: &Limbs, modulus: &Limbs) -> Limbs {
-    debug_assert!(
-        is_canonical(lhs, modulus),
-        "pasta_asm::sub requires a canonical lhs"
-    );
-    debug_assert!(
-        is_canonical(rhs, modulus),
-        "pasta_asm::sub requires a canonical rhs"
-    );
+if_supported! {
+    /// The backend in use, for diagnostics: `"aarch64"` or `"x86-64"` where the crate has one,
+    /// and `"portable"` where it is empty and a consumer's fallback applies.
+    pub const BACKEND: &str = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86-64" };
 
-    #[cfg(target_arch = "aarch64")]
-    {
-        crate::aarch64::sub(lhs, rhs, modulus)
-    }
+    #[cfg(any(target_arch = "aarch64", doc))]
+    mod aarch64;
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        crate::x86_64::sub(lhs, rhs, modulus)
-    }
+    #[cfg(any(target_arch = "x86_64", doc))]
+    mod x86_64;
+
+    // The tests use std only to catch the debug assertions they check, so a release test
+    // build stays free of it.
+    #[cfg(all(test, debug_assertions))]
+    extern crate std;
+
+    #[cfg(test)]
+    mod tests;
+
+    mod entry;
+    pub use entry::*;
 }
 
-/// Multiplies two Montgomery residues for a Pasta modulus.
-///
-/// # Safety
-///
-/// Either `lhs` is canonical (below the modulus) and `rhs` is any four-limb value, or
-/// `rhs` is canonical with each of its limbs 1 to 3 at most `2^64 - 3` and `lhs` is any
-/// four-limb value. This is debug-asserted, and under it the machine-checked proofs in
-/// `lean/` establish the result (`mul_entry_spec`, from `mulMont_spec_of_lhs_lt` and
-/// `mulMont_spec_of_rhs_lt`).
-///
-/// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
-/// correctly derived from it. Any other values will cause undefined results.
-#[cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", target_pointer_width = "64")
-))]
-#[inline(always)]
-pub fn mul(lhs: &Limbs, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    debug_assert!(
-        is_canonical(lhs, modulus)
-            || (is_canonical(rhs, modulus) && rhs[1..].iter().all(|&limb| limb <= u64::MAX - 2)),
-        "pasta_asm::mul requires a canonical lhs, or a canonical rhs with limbs 1 to 3 at most \
-         2^64 - 3"
-    );
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        crate::aarch64::mul(lhs, rhs, modulus, inv)
-    }
-
-    #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
-    {
-        crate::x86_64::mul(lhs, rhs, modulus, inv)
-    }
-}
-
-/// Squares a canonical Montgomery residue for a Pasta modulus.
-///
-/// Outputs are canonical.
-///
-/// # Safety
-///
-/// The input of `square` must be canonical. This is debug-asserted, and under it the
-/// machine-checked proofs in `lean/` establish the result (`square_entry_spec`).
-///
-/// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
-/// correctly derived from it. Any other values will cause undefined results.
-#[cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", target_pointer_width = "64")
-))]
-#[inline(always)]
-pub fn square(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    debug_assert!(
-        is_canonical(value, modulus),
-        "pasta_asm::square requires a canonical input"
-    );
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        crate::aarch64::square(value, modulus, inv)
-    }
-
-    #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
-    {
-        crate::x86_64::square(value, modulus, inv)
-    }
-}
-
-/// Squares a canonical Montgomery residue `count` times, then multiplies the
-/// result by the canonical Montgomery residue `rhs`.
-///
-/// A `count` of zero is just the multiplication. For a canonical `value`, the machine-checked
-/// proofs in `lean/` establish the result (`sqrNMul_entry_spec`).
-///
-/// Each step is one of the inline blocks, which the compiler inlines, so the accumulator
-/// stays in registers throughout.
-///
-/// # Safety
-///
-/// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
-/// correctly derived from it. Any other values will cause undefined results.
-#[cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", target_pointer_width = "64")
-))]
-#[inline]
-pub fn sqr_n_mul(value: &Limbs, count: usize, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    // On aarch64, `square` and `mul` can be inlined and optimised by Rust.
-    #[cfg(target_arch = "aarch64")]
-    {
-        let mut acc = *value;
-        for _ in 0..count {
-            acc = square(&acc, modulus, inv);
-        }
-        mul(&acc, rhs, modulus, inv)
-    }
-
-    // On x86_64, `square` and `mul` can't be inlined due to register pressure, so we need
-    // a separate fused assembly implementation.
-    #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
-    {
-        crate::x86_64::sqr_n_mul(value, count, rhs, modulus, inv)
-    }
-}
-
-/// Converts a Montgomery residue into its canonical integer, `value * 2^-256 mod p`, as a
-/// Montgomery multiplication by one.
-///
-/// Any four-limb `value` is accepted: `1` is canonical with limbs 1 to 3 zero, so it is a
-/// right operand inside the multiplication's contract for any left operand; the
-/// machine-checked proofs in `lean/` establish the result (`fromMont_entry_spec`).
-///
-/// # Safety
-///
-/// `modulus` must be either the Pallas or Vesta field modulus, and `inv` must be
-/// correctly derived from it. Any other values will cause undefined results.
-#[inline]
-pub fn from_mont(value: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
-    // On aarch64, `mul` can be inlined and optimised by Rust.
-    #[cfg(target_arch = "aarch64")]
-    {
-        mul(value, &[1, 0, 0, 0], modulus, inv)
-    }
-
-    // On x86_64, `mul` can't be inlined due to register pressure, so we use a dedicated
-    // register-only assembly implementation instead.
-    #[cfg(target_arch = "x86_64")]
-    {
-        crate::x86_64::from_mont(value, modulus, inv)
-    }
+if_unsupported! {
+    /// The backend in use, for diagnostics: `"aarch64"` or `"x86-64"` where the crate has one,
+    /// and `"portable"` where it is empty and a consumer's fallback applies.
+    pub const BACKEND: &str = "portable";
 }

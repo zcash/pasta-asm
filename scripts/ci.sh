@@ -49,6 +49,16 @@ for profile in "" --release; do
   fi
 done
 
+step "with the assembly disabled, the unit tests compile out and the doc example still passes"
+disable=(env RUSTFLAGS="--cfg pasta_asm_disable" RUSTDOCFLAGS="--cfg pasta_asm_disable")
+"${disable[@]}" cargo build
+for profile in "" --release; do
+  out=$("${disable[@]}" cargo test --lib $profile 2>&1) || { echo "$out"; exit 1; }
+  echo "$out" | grep -q '^test result: ok. 0 passed' ||
+    { echo "$out"; echo "unit tests ran with the assembly disabled"; exit 1; }
+done
+"${disable[@]}" cargo test --doc
+
 step "the build and the tests changed no tracked file"
 test "$before" = "$(git status --porcelain)"
 

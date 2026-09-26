@@ -26,10 +26,28 @@ The crate provides a backend for `target_arch = "aarch64"` and, in part, for
 needs BMI2 for `from_mont`). `mul`, `square`, and the routines built on them read limbs
 through pointers and so require 64-bit pointers, plus MULX and ADCX/ADOX (BMI2 and ADX: Intel
 Broadwell / AMD Zen or newer). Apple x86-64 targets are excluded altogether: they reserve
-`rbp`, and so have fewer available registers than the squaring blocks need. On other targets
-this crate is empty, so a consumer gates its use on that `cfg` and falls back to portable
-arithmetic elsewhere. Nothing is assembled at build time: the blocks are compiled by the Rust
-toolchain, so no C toolchain is needed, and the crate is `no_std` with no dependencies.
+`rbp`, and so have fewer available registers than the squaring blocks need.
+
+On every other target the crate is empty. It is also empty, on any target, when the compiler is
+passed `--cfg pasta_asm_disable` (through `RUSTFLAGS`, or `rustflags` in `.cargo/config.toml`),
+which is how to build for old x86-64 CPUs without BMI2 and ADX. A consumer does not repeat
+these conditions: it declares its uses of the crate under `pasta_asm::if_supported!` and its
+portable fallback under `pasta_asm::if_unsupported!`; the first expands to its items exactly
+where the crate has a backend, and the second exactly where it does not. `pasta_asm::BACKEND`
+names the result. Two things follow for a direct consumer. The expansion is checked in the
+consumer's crate, so the consumer declares the cfg as expected, in its `Cargo.toml`:
+
+```toml
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pasta_asm_disable)'] }
+```
+
+And a build that sets the flag sets it for rustdoc too (`RUSTDOCFLAGS`): `cargo test` and
+`cargo doc` run rustdoc over the consumer's crate, which expands the macros under rustdoc's
+flags, and against a crate built with the flag the supported arm does not resolve.
+
+Nothing is assembled at build time: the blocks are compiled by the Rust toolchain, so no C
+toolchain is needed, and the crate is `no_std` with no dependencies.
 
 Field elements and moduli are `[u64; 4]`, least significant limb first, and `inv` is
 `-modulus[0]^-1 mod 2^64`. The routines take the modulus and `inv` as arguments, so one
