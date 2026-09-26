@@ -22,14 +22,14 @@ chain and the conversion through assembled routines instead.
 ## Usage
 
 The crate provides a backend for `target_arch = "aarch64"` and, in part, for
-`target_arch = "x86_64"`: `add`, `sub`, and `from_mont` are register-only and available
-on every x86-64 target (MULX needs BMI2 for `from_mont`), while `mul`, `square`, and the
-routines built on them read limbs through
-pointers and so require 64-bit pointers, plus MULX and ADCX/ADOX (BMI2 and ADX: Intel
-Broadwell / AMD Zen or newer). On other targets this crate is empty, so a consumer gates
-its use on that `cfg` and falls back to portable arithmetic
-elsewhere. Nothing is assembled at build time: the blocks are compiled by the Rust toolchain,
-so no C toolchain is needed, and the crate is `no_std` with no dependencies.
+`target_arch = "x86_64"`. On x86-64, `add`, `sub`, and `from_mont` are register-only (MULX
+needs BMI2 for `from_mont`). `mul`, `square`, and the routines built on them read limbs
+through pointers and so require 64-bit pointers, plus MULX and ADCX/ADOX (BMI2 and ADX: Intel
+Broadwell / AMD Zen or newer). Apple x86-64 targets are excluded altogether: they reserve
+`rbp`, and so have fewer available registers than the squaring blocks need. On other targets
+this crate is empty, so a consumer gates its use on that `cfg` and falls back to portable
+arithmetic elsewhere. Nothing is assembled at build time: the blocks are compiled by the Rust
+toolchain, so no C toolchain is needed, and the crate is `no_std` with no dependencies.
 
 Field elements and moduli are `[u64; 4]`, least significant limb first, and `inv` is
 `-modulus[0]^-1 mod 2^64`. The routines take the modulus and `inv` as arguments, so one
