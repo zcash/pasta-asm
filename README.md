@@ -1,13 +1,14 @@
 # pasta-asm
 
 Assembly backends for the Pasta (Pallas and Vesta) field arithmetic of the
-[`pasta_curves`](https://github.com/zcash/pasta_curves) crate. The crate currently provides an
-AArch64 backend for Montgomery multiplication, squaring, a repeated-squaring chain, and
-conversion out of Montgomery form.
+[`pasta_curves`](https://github.com/zcash/pasta_curves) crate. The crate provides AArch64 and
+x86-64 backends for modular addition and subtraction, Montgomery multiplication and squaring,
+a repeated-squaring chain, inversion, and conversion out of Montgomery form. Availability
+and CPU requirements differ by operation; see Usage below.
 
 ## Provenance
 
-The routines are transcriptions of the Pasta Montgomery routines of Supranational's
+The Montgomery multiplication and squaring backends derive from the Pasta routines of Supranational's
 [Semolina](https://github.com/supranational/semolina) v0.1.4
 ([`src/mach-o/pasta_mul-armv8.S`](https://github.com/supranational/semolina/blob/v0.1.4/src/mach-o/pasta_mul-armv8.S)).
 `src/aarch64.rs` carries multiplication and squaring as register-renamed inline `asm!` blocks
@@ -19,17 +20,44 @@ compositions of those blocks. The blocks were ported and adapted in
 from that pull request at commit `efc0c69533f491743162f3263acfb6c23603ad91`, which reaches the
 chain and the conversion through assembled routines instead.
 
+The inversion backends in `src/{aarch64,x86_64}/invert.rs` are staged inline-assembly
+ports of Semolina v0.1.4's `ct_inverse_pasta` routine (commit
+`13ffc78074a6fbec44a4fd12b7f585a0bc1dc154`). Sources are the
+[AArch64 generator](https://github.com/supranational/semolina/blob/v0.1.4/src/asm/ct_inverse_mod_256-armv8.pl)
+and [x86-64 generator](https://github.com/supranational/semolina/blob/v0.1.4/src/asm/ct_inverse_mod_256-x86_64.pl),
+checked against their generated
+[AArch64](https://github.com/supranational/semolina/blob/v0.1.4/src/elf/ct_inverse_mod_256-armv8.S)
+and [x86-64](https://github.com/supranational/semolina/blob/v0.1.4/src/elf/ct_inverse_mod_256-x86_64.s)
+instruction streams. The Montgomery wrapper is adapted from
+[`recip.c`](https://github.com/supranational/semolina/blob/v0.1.4/src/recip.c).
+
+The ports retain the approximation, binary-GCD inner-loop, and final-correction
+kernels and the fixed 15 × 31 + 47 iteration schedule. They adapt coefficient updates
+to fixed-width signed arithmetic instead of upstream's width-specialized helpers,
+replace memory-based helper interfaces with register operands, and use a Rust driver.
+Every inversion assembly block declares `nomem`; compiler-generated loads and spills
+outside the blocks remain possible. Converting the input out of Montgomery form first
+and using a split reduction afterward avoids upstream's final multiplication by `R^2`.
+There is no global assembly or external assembler. Inversion returns a canonical Montgomery
+residue and maps zero to zero. This new port is not covered by the existing Lean
+proofs. The independent inversion tests run on native x86-64; AArch64 has been
+cross-built but still needs runtime validation on AArch64 hardware.
+
 ## Usage
 
-The crate provides a backend for `target_arch = "aarch64"` and, in part, for
-`target_arch = "x86_64"`: `add`, `sub`, and `from_mont` are register-only and available
-on every x86-64 target (MULX needs BMI2 for `from_mont`), while `mul`, `square`, and the
-routines built on them read limbs through
-pointers and so require 64-bit pointers, plus MULX and ADCX/ADOX (BMI2 and ADX: Intel
-Broadwell / AMD Zen or newer). On other targets this crate is empty, so a consumer gates
-its use on that `cfg` and falls back to portable arithmetic
-elsewhere. Nothing is assembled at build time: the blocks are compiled by the Rust toolchain,
-so no C toolchain is needed, and the crate is `no_std` with no dependencies.
+The crate provides all operations on `target_arch = "aarch64"`. On
+`target_arch = "x86_64"`, availability is operation-specific:
+
+- `add` and `sub` use baseline x86-64 instructions and register-only operands.
+- `from_mont` and `invert` also use register-only assembly, but require BMI2 (MULX).
+  They do not require ADX or 64-bit pointers.
+- `mul`, `square`, and `sqr_n_mul` use pointer-based assembly operands and require
+  64-bit pointers, BMI2, and ADX (MULX and ADCX/ADOX: Intel Broadwell / AMD Zen or newer).
+
+CPU features are not checked at runtime. On other architectures this crate is empty;
+consumers must gate each operation appropriately and fall back to portable arithmetic.
+The Rust toolchain assembles the inline blocks, so no external assembler or C toolchain
+is needed. The crate is `no_std` with no dependencies.
 
 Field elements and moduli are `[u64; 4]`, least significant limb first, and `inv` is
 `-modulus[0]^-1 mod 2^64`. The routines take the modulus and `inv` as arguments, so one
@@ -39,10 +67,10 @@ each entry point.
 
 ## Testing
 
-On AArch64, `cargo test --release` runs known-answer tests of the four entry points for both
-fields; on other targets there is nothing to test. `pasta_curves` tests the backend against
-its portable arithmetic when its `aarch64-asm` feature is enabled. `scripts/ci.sh` runs every
-check CI runs.
+On AArch64 and x86-64 (with 64-bit pointers if relevant), `cargo test` runs known-answer tests
+of the entry points for both fields; on other targets there is nothing to test. `pasta_curves`
+tests the backend against its portable arithmetic when its `asm` feature is enabled.
+`scripts/ci.sh` runs every check CI runs.
 
 ## Formal verification
 
