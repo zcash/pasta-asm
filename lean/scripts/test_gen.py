@@ -513,7 +513,6 @@ class SharedGeneratorTests(unittest.TestCase):
         )
         self.assertTrue(any(entry.get("group_fact", entry["fact"])[0] == "x86_mulx"
                             for entry in x86_prepared.entries))
-        self.assertTrue(any(x86_prepared.history))
 
     def test_shared_skeleton_has_no_architecture_dispatch_or_isa_fact_rules(self):
         source = gen.Path(gen.__file__).read_text()
@@ -553,23 +552,38 @@ class SharedGeneratorTests(unittest.TestCase):
             retained.render(["result"]),
         )
 
-    def test_x86_skeleton_matches_lift_lets_cse_and_retained_instruction_lets(self):
+    def test_x86_skeleton_extracts_every_retained_instruction_let(self):
         routines = {routine.name: routine for routine in gen_x86_64.all_routines()}
+        # Every retained binding is extracted exactly once, equal values included (the three
+        # zeros of an `xor r, r`, a repeated `mov` from `rdx`), since merging is off.
+        for name in ("squareLo", "mulMontRound", "fromMont"):
+            with self.subTest(routine=name):
+                routine = routines[name]
+                prepared = gen_x86_64.SKELETON_BACKEND.prepare(
+                    routine.emitter, routine.emitter.entries
+                )
+                extracted, current = [], None
+                for line in gen.skeleton(routine):
+                    if line.startswith("  extract_lets -merge +onlyGivenNames "):
+                        current = line[len("  extract_lets -merge +onlyGivenNames "):]
+                    elif current is not None:
+                        current += " " + line.strip()
+                    if current is not None and current.endswith(" at hr"):
+                        extracted += current[:-len(" at hr")].split()
+                        current = None
+                self.assertEqual(sorted(extracted), sorted(prepared.names))
+                self.assertEqual(len(extracted), len(set(extracted)))
         square_lo = "\n".join(gen.skeleton(routines["squareLo"]))
-        self.assertEqual(square_lo.count("extract_lets +onlyGivenNames z5 at hr"), 1)
-        self.assertNotIn("extract_lets +onlyGivenNames z6 at hr", square_lo)
-        self.assertNotIn("extract_lets +onlyGivenNames z7 at hr", square_lo)
-        self.assertNotIn("have e_cf : cf = 0 := rfl", square_lo)
-        self.assertNotIn("have e_ofl : ofl = 0 := rfl", square_lo)
-        self.assertIn("extract_lets +onlyGivenNames s_2 z4_1 cf_5 at hr", square_lo)
+        self.assertIn("extract_lets -merge +onlyGivenNames s_2 z4_1 cf_5 at hr", square_lo)
         self.assertNotIn("obtain ⟨cf_5, b_cf_5, l_z4_1⟩", square_lo)
 
         mul_round_routine = routines["mulMontRound"]
         mul_round = "\n".join(gen.skeleton(mul_round_routine))
-        self.assertNotIn("extract_lets +onlyGivenNames m ", mul_round)
-        self.assertNotIn("extract_lets +onlyGivenNames s at hr", mul_round)
-        self.assertIn("have e_r0_1 : r0_1 = (addc r0 s1_1 s1).1 := rfl", mul_round)
-        self.assertIn("have e_cf_1 : cf_1 = (addc r0 s1_1 s1).2 := rfl", mul_round)
+        self.assertNotIn("extract_lets -merge +onlyGivenNames m ", mul_round)
+        self.assertNotIn("extract_lets -merge +onlyGivenNames s at hr", mul_round)
+        # The flags zeroed by `xor` are read under their own names, not the data register's.
+        self.assertIn("have e_r0_1 : r0_1 = (addc r0 s1_1 cf).1 := rfl", mul_round)
+        self.assertIn("have e_cf_1 : cf_1 = (addc r0 s1_1 cf).2 := rfl", mul_round)
         self.assertNotIn("clear_value", mul_round)
         helper_text = "\n".join(code for code, _ in mul_round_routine.lines)
         self.assertNotIn("let m :=", helper_text)
@@ -585,7 +599,7 @@ class SharedGeneratorTests(unittest.TestCase):
         self.assertFalse(any("mulx b modulus.l1" in expr for expr in expressions[quotient_index:]))
 
         from_mont = "\n".join(gen.skeleton(routines["fromMont"]))
-        self.assertIn("extract_lets +onlyGivenNames n z0_1 cf at hr", from_mont)
+        self.assertIn("extract_lets -merge +onlyGivenNames n z0_1 cf at hr", from_mont)
         self.assertIn("have e_z0_1 : z0_1 = (neg z0).1 := rfl", from_mont)
         self.assertIn("have e_cf : cf = (neg z0).2 := rfl", from_mont)
         self.assertIn("clear_value", from_mont)
