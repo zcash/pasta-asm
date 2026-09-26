@@ -88,14 +88,18 @@
 //!
 //! [Semolina]: https://github.com/supranational/semolina
 
-/// Declares the items only where this crate has a backend.
+/// Declares items, a local binding, or a block only where this crate has a backend.
 ///
-/// The expansion carries the crate's own condition, the target and the absence of
-/// `--cfg pasta_asm_disable`, so a consumer routes its arithmetic through the crate without
-/// repeating it. The items are `use`s, functions, modules, or anything else in item position.
+/// The expansion carries the target and absence of `--cfg pasta_asm_disable`,
+/// so consumers do not repeat the backend condition. Write an extra pair of
+/// braces to cfg-gate arbitrary statements in a block: `if_supported! {{ ... }}`.
+/// A binding used after the macro must instead be written without the extra
+/// braces: `if_supported! { let value = expression; }`.
+///
+/// An optional dependency requires `#[cfg(feature = "asm")]` on the invocation.
 #[macro_export]
 macro_rules! if_supported {
-    ($($item:item)*) => { $(
+    (@cfg $($tokens:tt)+) => {
         // The x86-64 multiplication family addresses limbs through pointers, so the backend needs
         // 64-bit pointers; and Apple x86-64 targets reserve `rbp`, and so have fewer available
         // registers than the squaring blocks need.
@@ -106,19 +110,32 @@ macro_rules! if_supported {
                 all(
                     target_arch = "x86_64",
                     target_pointer_width = "64",
-                    not(target_vendor = "apple")
+                    not(target_vendor = "apple"),
                 )
             )
         ))]
-        $item
+        $($tokens)+
+    };
+    ({ $($body:tt)* }) => {
+        $crate::if_supported! { @cfg { $($body)* } }
+    };
+    (let $name:ident $(: $ty:ty)? = $value:expr;) => {
+        $crate::if_supported! { @cfg let $name $(: $ty)? = $value; }
+    };
+    ($($item:item)*) => { $(
+        $crate::if_supported! { @cfg $item }
     )* };
 }
 
-/// Declares the items only where this crate has no backend: the complement of
-/// [`if_supported!`], for a consumer's portable fallback.
+/// Declares items, a local binding, or a block where this crate has no backend.
+/// This is the complement of [`if_supported!`] for portable fallbacks.
+///
+/// With an optional dependency, gate both macro invocations on its enabling
+/// feature and provide a separate `#[cfg(not(feature = "asm"))]` fallback.
+/// Cfgs on the invocation are evaluated in the consumer's crate.
 #[macro_export]
 macro_rules! if_unsupported {
-    ($($item:item)*) => { $(
+    (@cfg $($tokens:tt)+) => {
         #[cfg(not(all(
             not(pasta_asm_disable),
             any(
@@ -126,11 +143,20 @@ macro_rules! if_unsupported {
                 all(
                     target_arch = "x86_64",
                     target_pointer_width = "64",
-                    not(target_vendor = "apple")
+                    not(target_vendor = "apple"),
                 )
             )
         )))]
-        $item
+        $($tokens)+
+    };
+    ({ $($body:tt)* }) => {
+        $crate::if_unsupported! { @cfg { $($body)* } }
+    };
+    (let $name:ident $(: $ty:ty)? = $value:expr;) => {
+        $crate::if_unsupported! { @cfg let $name $(: $ty)? = $value; }
+    };
+    ($($item:item)*) => { $(
+        $crate::if_unsupported! { @cfg $item }
     )* };
 }
 
