@@ -4,7 +4,19 @@ The `PastaAsm` library separates shared arithmetic definitions and lemmas from
 architecture-specific models. The AArch64 backend has transcriptions and correctness proofs.
 `PastaAsm/X86_64/Semantics.lean` adds the x86-64 word operations and borrow convention;
 `X86_64/Transcription.lean` mechanically transcribes all six assembly blocks from
-`src/x86_64.rs`. x86-64 correctness proofs are not yet present.
+`src/x86_64.rs`. The x86-64 addition and subtraction blocks have correctness proofs in
+`X86_64/Spec/Add.lean` and `X86_64/Spec/Sub.lean`, with field-specialized `add_entry_spec` and
+`sub_entry_spec` theorems in `X86_64/Entry.lean`. `X86_64/Spec/Square.lean` proves the exact
+eight-limb square, its `squareHi` Montgomery reduction, and their `sqrMont` composition.
+`X86_64/Spec/FromMont.lean` proves the standalone conversion block for every four-limb input,
+including all four cancellation steps and the final conditional subtraction.
+`X86_64/Spec/Mul.lean` proves Montgomery multiplication under both public operand contracts,
+using mechanically factored internal rounds. The repeated-squaring-and-multiplication and
+field-entry theorems are also proven. `X86_64/Spec.lean` exposes the completed block proofs;
+`Compositions.lean` mirrors Rust. `X86_64/Vectors.lean` checks the x86-64 blocks against the 874
+in-contract vectors of the shared `Vectors.lean`, the existing AArch64 hardware corpus, so these
+are cross-backend checks rather than x86 hardware captures. `Checks.lean` supplies additional
+kernel-checked arithmetic regressions.
 
 Both architectures use `scripts/gen.py`, with shared Rust `asm!` parsing and
 architecture-specific instruction emitters; `--check` compares generated output without
@@ -52,8 +64,8 @@ What is trusted, beyond Lean's kernel and standard axioms:
    operand declarations; CI regenerates and diffs.
 3. The Rust mirrored in `PastaAsm/AArch64/Compositions.lean` and `PastaAsm/X86_64/Compositions.lean`:
    the compositions `sqr_n_mul` and `from_mont`; and in `PastaAsm/Compositions.lean`: the shared
-   limb comparison `is_canonical` and the condition that `mul` asserts. A few lines each, checked
-   by inspection.
+   canonicity check `is_canonical` and the condition `mul_contract` that `mul` asserts. A few
+   lines each, checked by inspection.
 4. The reference vectors: outputs of the real assembly on an Apple M-series machine, at
    pasta_curves commit `8ad85e9fab7929f6236960e472f432a4bd9ccd74`, embedded as kernel-checked
    examples (`decide +kernel`). These are concrete closed facts that any independent run of
@@ -81,26 +93,34 @@ PastaAsm/Semantics.lean               shared 64-bit arithmetic and limb represen
 PastaAsm/Compositions.lean            shared operand comparisons and contracts
 PastaAsm/Fields.lean                  the two fields and facts about their constants
 PastaAsm/Spec.lean                    shared arithmetic and limb lemmas
+PastaAsm/Vectors.lean                 GENERATED: the reference vectors inside the contracts
+../test-vectors/pasta_mul-armv8-vectors.txt   the hardware outputs the vectors are generated from
+PastaAsm/VectorCheck.lean             a backend's routines, and the vectors it fails
 PastaAsm/AArch64.lean                 AArch64 umbrella module
 PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
 PastaAsm/AArch64/Transcription.lean   GENERATED: the blocks and the round
 PastaAsm/AArch64/Compositions.lean    compositions of the AArch64 blocks
-PastaAsm/AArch64/Vectors.lean         GENERATED: reference vectors, kernel-checked
+PastaAsm/AArch64/Vectors.lean         the AArch64 blocks on the vectors, kernel-checked
 PastaAsm/AArch64/Spec.lean            proofs about the AArch64 blocks and compositions
+PastaAsm/AArch64/Spec/*.lean          the block proofs, one file per block, imported by Spec.lean
 PastaAsm/AArch64/Entry.lean           proofs about the AArch64 entry points at the two fields
-../test-vectors/pasta_mul-armv8-vectors.txt   the hardware outputs the examples are generated from
 PastaAsm/X86_64.lean                  x86-64 umbrella module
 PastaAsm/X86_64/Semantics.lean        x86-64 instruction semantics and eight-word product
 PastaAsm/X86_64/Transcription.lean    GENERATED: all six x86-64 assembly blocks
 PastaAsm/X86_64/Compositions.lean     split square, repeated squaring, backend contracts
-PastaAsm/X86_64/Vectors.lean          GENERATED: cross-backend reference checks
+PastaAsm/X86_64/Vectors.lean          the x86-64 blocks on the vectors, kernel-checked
 PastaAsm/X86_64/Checks.lean           additional kernel-checked arithmetic examples
+PastaAsm/X86_64/Spec.lean             proofs about the x86-64 blocks and compositions
+PastaAsm/X86_64/Spec/*.lean           the block proofs, one file per block, and Arithmetic.lean
+PastaAsm/X86_64/Entry.lean            proofs about the x86-64 entry points at the two fields
 scripts/gen.py                        shared bindings, vectors, skeletons, checks, and CLI
 scripts/asm_source.py                 shared Rust inline-assembly parser and validation
 scripts/gen_aarch64.py                AArch64 decoding, round factoring, and proof-fact hooks
 scripts/gen_x86_64.py                 x86-64 decoding, flag validation, and proof-fact hooks
-scripts/check.sh                      regenerate and diff, skeleton check (CI)
+scripts/test_*.py                     the generator's tests, run by check.sh
+scripts/check.sh                      regenerate and diff, skeleton check, generator tests (CI)
 scripts/check_nanoda.sh               re-check the build with an independent kernel (CI)
+scripts/check_export_axioms.py        the axiom census of that export, run by check_nanoda.sh
 ```
 
 Shared declarations use namespace `PastaAsm`; architecture declarations use

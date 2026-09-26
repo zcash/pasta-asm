@@ -13,4 +13,8 @@ keywords = ["pasta", "pallas", "vesta", "montgomery", "aarch64"]
 # Build one synthetic documentation set containing every architecture backend.
 targets = []
 
+[lints.rust]
+# `--cfg pasta_asm_disable` empties the crate; see the crate documentation.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pasta_asm_disable)'] }
+
 [dependencies]

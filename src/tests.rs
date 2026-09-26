@@ -6,18 +6,31 @@
 //! agree with those. The differential tests against portable arithmetic live in
 //! `pasta_curves`, which has both implementations.
 
-// The mul-family routines are gated on 64-bit pointers on x86-64, so on
-// other targets the constants below are unused; the known answers are
-// always kept in full so the sources match across targets.
-#![allow(dead_code)]
-
 use super::{Limbs, add, from_mont, sub};
 
-#[cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", target_pointer_width = "64")
-))]
 use super::{mul, sqr_n_mul, square};
+
+#[test]
+fn backend_name() {
+    let expected = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86-64" };
+    assert_eq!(super::BACKEND, expected);
+}
+
+/// The borrow chain of `is_canonical` decides `value < modulus` at the limb boundaries.
+#[test]
+fn is_canonical_borrow_chain() {
+    let m = [5, 0, 0, 7];
+    assert!(super::is_canonical(&[4, 0, 0, 7], &m));
+    assert!(!super::is_canonical(&m, &m));
+    assert!(!super::is_canonical(&[6, 0, 0, 7], &m));
+    // A borrow out of the low limbs is absorbed by a larger top limb, and forced by a smaller one.
+    assert!(super::is_canonical(&[u64::MAX, u64::MAX, u64::MAX, 6], &m));
+    assert!(!super::is_canonical(&[0, 0, 0, 8], &m));
+    // A middle limb decides when the top limbs agree.
+    assert!(!super::is_canonical(&[0, 1, 0, 7], &m));
+    assert!(super::is_canonical(&[u64::MAX, 0, 0, 6], &m));
+    assert!(super::is_canonical(&[0, 0, 0, 0], &m));
+}
 
 /// One field's constants and known answers.
 struct Field {
@@ -215,10 +228,6 @@ fn sub_known_answers() {
     }
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", target_pointer_width = "64")
-))]
 #[test]
 fn mul_known_answers() {
     for f in FIELDS {
@@ -232,10 +241,6 @@ fn mul_known_answers() {
     }
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", target_pointer_width = "64")
-))]
 #[test]
 fn square_known_answers() {
     for f in FIELDS {
@@ -247,10 +252,6 @@ fn square_known_answers() {
     }
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    all(target_arch = "x86_64", target_pointer_width = "64")
-))]
 #[test]
 fn sqr_n_mul_known_answers() {
     for f in FIELDS {
@@ -328,18 +329,14 @@ fn parse_vector(line: &str) -> (&str, &'static Field, Limbs, Option<Limbs>, Limb
 /// Whether a vector's operands are inside its routine's contract: for the multiplication, a
 /// canonical left operand, or a canonical right operand whose limbs 1 to 3 are at most
 /// `2^64 - 3` (the contract that the proofs establish); for the squaring, the addition, and
-/// the subtraction, canonical inputs; for the conversion, any input. On x86-64, multiplication
-/// also requires a canonical rhs, as asserted by the backend even when the public wrapper
-/// permits the operands.
+/// the subtraction, canonical inputs; for the conversion, any input.
 fn in_contract(op: &str, f: &Field, first: &Limbs, second: Option<&Limbs>) -> bool {
     match op {
         "MUL" => {
             let rhs = second.unwrap();
-            let public = super::is_canonical(first, &f.modulus)
+            super::is_canonical(first, &f.modulus)
                 || (super::is_canonical(rhs, &f.modulus)
-                    && rhs[1..].iter().all(|&limb| limb <= u64::MAX - 2));
-            // The x86 backend additionally asserts a canonical right operand.
-            public && (!cfg!(target_arch = "x86_64") || super::is_canonical(rhs, &f.modulus))
+                    && rhs[1..].iter().all(|&limb| limb <= u64::MAX - 2))
         }
         "SQR" => super::is_canonical(first, &f.modulus),
         "ADD" | "SUB" => {
@@ -368,10 +365,9 @@ fn run(op: &str, f: &Field, first: &Limbs, second: Option<&Limbs>) -> Limbs {
 /// vectors outside the contracts, multiplications with unreduced operands, are not run: the
 /// block drops the fifth limb of its final candidate, which can change the result there (it
 /// agrees with the routine on 136 of them and differs on 44, all with both operands
-/// unreduced). On x86-64, another 132 multiplication vectors are excluded by the backend's
-/// canonical-rhs assertion. In a debug build the test checks instead that the assertion of the
-/// routine's contract fires on each of them. Where a panic cannot be caught, it skips them, with
-/// one warning. The file holds no addition or subtraction vectors; the counts below say so, and
+/// unreduced). In a debug build the test checks instead that the assertion of the routine's
+/// contract fires on each of them. Where a panic cannot be caught, it skips them, with one
+/// warning. The file holds no addition or subtraction vectors; the counts below say so, and
 /// the code handles them so that a file that gains some needs no other change.
 #[test]
 fn hardware_vectors_match() {
@@ -399,15 +395,7 @@ fn hardware_vectors_match() {
                 let message = panic
                     .downcast_ref::<&str>()
                     .expect("the assertion's message is a string literal");
-                // A multiplication that the public contract admits is outside only on x86-64,
-                // by the backend's own assertion.
                 let expected_message = match op {
-                    "MUL"
-                        if cfg!(target_arch = "x86_64")
-                            && super::is_canonical(&first, &f.modulus) =>
-                    {
-                        "x86_64_asm::mul requires a canonical rhs"
-                    }
                     "MUL" => "requires a canonical lhs",
                     "SQR" => "requires a canonical input",
                     _ => "requires a canonical",
@@ -419,13 +407,8 @@ fn hardware_vectors_match() {
         assert_eq!(run(op, f, &first, second.as_ref()), expected, "{line}");
         checked[index] += 1;
     }
-    if cfg!(target_arch = "x86_64") {
-        assert_eq!(checked, [674, 34, 34, 0, 0]);
-        assert_eq!(outside, [312, 0, 0, 0, 0]);
-    } else {
-        assert_eq!(checked, [806, 34, 34, 0, 0]);
-        assert_eq!(outside, [180, 0, 0, 0, 0]);
-    }
+    assert_eq!(checked, [806, 34, 34, 0, 0]);
+    assert_eq!(outside, [180, 0, 0, 0, 0]);
     #[cfg(all(debug_assertions, not(panic = "unwind")))]
     std::eprintln!(
         "warning: the assertions of the routines' contracts were not checked to fire on the \

@@ -51,6 +51,21 @@ jobs:
             echo "$out"
             echo "$out" | grep -q "^test result: ok. $expected passed"
           done
+      - name: Build and test with the assembly disabled, with nothing to run
+        shell: bash
+        env:
+          RUSTFLAGS: --cfg pasta_asm_disable
+          RUSTDOCFLAGS: --cfg pasta_asm_disable
+        # The unit tests compile out with the assembly; the crate documentation's
+        # example takes its portable arm and still passes.
+        run: |
+          cargo build --verbose
+          for profile in "" --release; do
+            out=$(cargo test --lib $profile 2>&1)
+            echo "$out"
+            echo "$out" | grep -q '^test result: ok. 0 passed'
+          done
+          cargo test --doc
       - name: Verify working directory is clean
         run: git diff --exit-code
 
@@ -95,6 +110,31 @@ jobs:
           deps=$(cargo tree -e normal --target all --prefix none)
           echo "$deps"
           test "$(printf '%s\n' "$deps" | grep -c .)" -eq 1
+
+  intel-macos:
+    name: Empty crate on Intel macOS
+    # Apple x86-64 targets reserve `rbp`, and so have fewer available registers
+    # than the squaring blocks need; the crate compiles out there instead of
+    # failing to build.
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Confirm the runner is Intel
+        run: test "$(uname -sm)" = "Darwin x86_64"
+      - name: Build
+        run: cargo build --verbose
+      - name: Test (debug and release), with no unit test to run
+        shell: bash
+        # The crate documentation's example takes its portable arm and still passes.
+        run: |
+          for profile in "" --release; do
+            out=$(cargo test --lib $profile 2>&1)
+            echo "$out"
+            echo "$out" | grep -q '^test result: ok. 0 passed'
+          done
+          cargo test --doc
 
   clippy:
     name: Clippy

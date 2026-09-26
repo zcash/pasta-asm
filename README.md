@@ -1,9 +1,9 @@
 # pasta-asm
 
 Assembly backends for the Pasta (Pallas and Vesta) field arithmetic of the
-[`pasta_curves`](https://github.com/zcash/pasta_curves) crate. The crate currently provides an
-AArch64 backend for Montgomery multiplication, squaring, a repeated-squaring chain, and
-conversion out of Montgomery form.
+[`pasta_curves`](https://github.com/zcash/pasta_curves) crate. The crate provides AArch64 and
+x86-64 backends for modular addition and subtraction, Montgomery multiplication and squaring, a
+repeated-squaring chain, and conversion out of Montgomery form.
 
 ## Provenance
 
@@ -17,19 +17,50 @@ compositions of those blocks. The blocks were ported and adapted in
 [zakura-core/common](https://github.com/zakura-core/common) and then in
 [zcash/pasta_curves#100](https://github.com/zcash/pasta_curves/pull/100). This crate imports them
 from that pull request at commit `efc0c69533f491743162f3263acfb6c23603ad91`, which reaches the
-chain and the conversion through assembled routines instead.
+chain and the conversion through assembled routines instead. The addition and subtraction
+blocks, which are not Semolina routines, and `src/x86_64.rs`, an x86-64 transcription of the
+same Montgomery routines rescheduled around MULX and ADCX/ADOX, were imported from
+zakura-pasta-curves.
 
 ## Usage
 
-The crate provides a backend for `target_arch = "aarch64"` and, in part, for
-`target_arch = "x86_64"`: `add`, `sub`, and `from_mont` are register-only and available
-on every x86-64 target (MULX needs BMI2 for `from_mont`), while `mul`, `square`, and the
-routines built on them read limbs through
-pointers and so require 64-bit pointers, plus MULX and ADCX/ADOX (BMI2 and ADX: Intel
-Broadwell / AMD Zen or newer). On other targets this crate is empty, so a consumer gates
-its use on that `cfg` and falls back to portable arithmetic
-elsewhere. Nothing is assembled at build time: the blocks are compiled by the Rust toolchain,
-so no C toolchain is needed, and the crate is `no_std` with no dependencies.
+The crate provides a backend for `target_arch = "aarch64"`, and for `target_arch = "x86_64"`
+with 64-bit pointers. On x86-64, `add`, `sub`, and `from_mont` are register-only (MULX needs
+BMI2 for `from_mont`). `mul`, `square`, and the routines built on them read limbs through
+pointers, which the x32 ABI's 32-bit pointers would break, so the crate is empty on that
+target; they also need MULX and ADCX/ADOX (BMI2 and ADX: Intel Broadwell / AMD Zen or newer).
+Apple x86-64 targets are excluded altogether: they reserve `rbp`, and so have fewer available
+registers than the squaring blocks need.
+
+On every other target, that is any target other than AArch64 and non-Apple x86-64 with 64-bit
+pointers, the crate is empty. It is also empty, on any target, when the compiler is passed
+`--cfg pasta_asm_disable` (through `RUSTFLAGS`, or `rustflags` in `.cargo/config.toml`), which
+is how to build for old x86-64 CPUs without BMI2 and ADX. A consumer does not repeat these
+conditions: it declares its uses of the crate under `pasta_asm::if_supported!` and its portable
+fallback under `pasta_asm::if_unsupported!`; the first expands to its items exactly where the
+crate has a backend, and the second exactly where it does not. `pasta_asm::BACKEND` names the
+result. Two things follow for a direct consumer. The expansion is checked in the consumer's
+crate, so the consumer declares the cfg as expected, in its `Cargo.toml`:
+
+```toml
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pasta_asm_disable)'] }
+```
+
+And a build that sets the flag sets it for rustdoc too (`RUSTDOCFLAGS`): `cargo test` and
+`cargo doc` run rustdoc over the consumer's crate, which expands the macros under rustdoc's
+flags, and against a crate built with the flag the supported arm does not resolve.
+
+Nothing is assembled at build time: the blocks are compiled by the Rust toolchain, so no C
+toolchain is needed, and the crate is `no_std` with no dependencies.
+
+The blocks have no data-dependent branch or memory access, and a release build runs nothing
+else. So the routines' timing should not depend on their operands, unless behaviour of the Rust
+toolchain or platform introduces an unexpected obstacle to that. A debug build also runs the
+assertions' checks, and debug mode carries no constant-time guarantee. The checks are written
+without data-dependent branches, and pass their words through `core::hint::black_box`, as
+`subtle` does. An inspection of the output of one toolchain (AArch64, Rust 1.96.1) found only
+the assertions' own branches left, but that is best effort, which the compiler owes nothing to.
 
 Field elements and moduli are `[u64; 4]`, least significant limb first, and `inv` is
 `-modulus[0]^-1 mod 2^64`. The routines take the modulus and `inv` as arguments, so one
@@ -37,12 +68,23 @@ implementation serves both fields, but they rely on the shape the two Pasta modu
 `modulus[2] = 0` and `modulus[3] = 2^62`. The crate documentation states the operand contract of
 each entry point.
 
+`mul` is Montgomery multiplication in the CIOS form (Coarsely Integrated Operand Scanning): see
+Çetin Kaya Koç, Tolga Acar, and Burton S. Kaliski Jr.,
+[Analyzing and Comparing Montgomery Multiplication Algorithms](https://www.microsoft.com/en-us/research/wp-content/uploads/1996/01/j37acmon.pdf),
+also published in IEEE Micro 16(3), 1996. Each of its four rounds adds `lhs` times one limb of
+`rhs` to an accumulator, cancels the accumulator's low limb by adding a multiple of the
+modulus, and shifts it down by one limb. Textbook CIOS keeps a six-limb accumulator for
+four-limb operands. These routines keep five, one fewer, which the operand contracts make safe.
+The squaring blocks and the conversion out of Montgomery form make the same cancellations.
+
 ## Testing
 
-On AArch64, `cargo test --release` runs known-answer tests of the four entry points for both
-fields; on other targets there is nothing to test. `pasta_curves` tests the backend against
-its portable arithmetic when its `aarch64-asm` feature is enabled. `scripts/ci.sh` runs every
-check CI runs.
+Where the crate has a backend, `cargo test --release` runs known-answer tests of the six entry
+points for both fields and replays the reference vectors recorded from the AArch64 assembly;
+in a debug build it also checks that the operand assertions fire outside the contracts.
+Elsewhere, and with `--cfg pasta_asm_disable`, only the crate documentation's example runs,
+on its portable arm. `pasta_curves` tests the backend against its portable arithmetic when its
+`aarch64-asm` feature is enabled. `scripts/ci.sh` runs every check CI runs.
 
 ## Formal verification
 

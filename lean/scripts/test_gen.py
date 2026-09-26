@@ -325,8 +325,10 @@ class X86RealSourceTests(unittest.TestCase):
         self.assertTrue(mul.rstrip().endswith("⟨ee, ae, be, ce⟩"))
         self.assertTrue(square_hi.rstrip().endswith("⟨a, z0, z1, z2⟩"))
 
-    def test_each_source_instruction_has_one_generated_comment(self):
+    def test_each_unfactored_source_instruction_has_one_generated_comment(self):
         for config in gen_x86_64.ROUTINES:
+            if config.lean_name == "mulMont":
+                continue
             with self.subTest(routine=config.lean_name):
                 parsed = gen_x86_64.parse_function(self.source, config)
                 generated = gen_x86_64.transcribe(self.source, config)
@@ -335,6 +337,76 @@ class X86RealSourceTests(unittest.TestCase):
                     instruction: comments[instruction]
                     for instruction in parsed.instructions
                 }))
+
+    def test_factored_mul_rounds_match_under_rotation(self):
+        routine = gen_x86_64.emit_routine(self.source, gen_x86_64.ROUTINES[2])
+        rounds = [
+            gen_x86_64._normalized_mul_round_entries(
+                routine.emitter, pc_range, rotation, f"rhs.l{index}"
+            )
+            for index, (pc_range, rotation) in enumerate(
+                zip(gen_x86_64.MUL_ROUND_RANGES, gen_x86_64.MUL_ROUND_ROTATIONS), start=1
+            )
+        ]
+        self.assertEqual(
+            gen_x86_64._round_fingerprint(rounds[0]),
+            gen_x86_64._round_fingerprint(rounds[1]),
+        )
+        self.assertEqual({entry["pc"] for entry in rounds[0]}, set(range(36)))
+
+    def test_factored_mul_round_difference_is_rejected(self):
+        source = self.mutate_function(
+            "mul",
+            '            "add {ce}, {s1}",\n            "adc {de}, {s2}",\n            "adc {ee}, 0",\n',
+            '            "add {ce}, {s1}",\n            "adc {de}, {s2}",\n            "adc {ee}, {s1}",\n',
+        )
+        with self.assertRaisesRegex(
+            gen_x86_64.GenerationError,
+            "flattened full rounds 1 and 2 differ after accumulator rotation",
+        ):
+            gen_x86_64.gen_program(source)
+
+    def test_factored_round_flattens_back_to_each_source_round(self):
+        routine = gen_x86_64.emit_routine(self.source, gen_x86_64.ROUTINES[2])
+        source_load, body = gen_x86_64._factored_round_body(routine.emitter)
+        registers = ["be", "ce", "de", "ee", "ae", "rdx"]
+        for round_number, (first, last) in enumerate(gen_x86_64.MUL_ROUND_RANGES, start=1):
+            source = [
+                entry for entry in routine.emitter.entries
+                if entry["pc"] is not None and first <= entry["pc"] <= last
+            ]
+            flattened = gen_x86_64._flattened_round_call(
+                source_load, body, registers, f"rhs.l{round_number}", first
+            )
+            self.assertEqual(
+                gen_x86_64._round_fingerprint(flattened), gen_x86_64._round_fingerprint(source)
+            )
+            self.assertEqual({entry["pc"] for entry in flattened}, set(range(first, last + 1)))
+            registers = registers[1:5] + registers[:1] + ["rdx"]
+
+    def test_factored_round_call_with_misordered_registers_is_rejected(self):
+        routine = gen_x86_64.emit_routine(self.source, gen_x86_64.ROUTINES[2])
+        source_load, body = gen_x86_64._factored_round_body(routine.emitter)
+        with self.assertRaisesRegex(
+            gen_x86_64.GenerationError, "does not flatten to the source's round 1"
+        ):
+            gen_x86_64._check_round_call(
+                routine.emitter, source_load, body, ["ce", "be", "de", "ee", "ae", "rdx"],
+                "rhs.l1", gen_x86_64.MUL_ROUND_RANGES[0], 1,
+            )
+
+    def test_factored_mul_comments_cover_one_validated_full_round(self):
+        generated = gen_x86_64.transcribe(self.source, gen_x86_64.ROUTINES[2])
+        comments = Counter(re.findall(r"-- (.+)$", generated, re.MULTILINE))
+        parsed = gen_x86_64.parse_function(self.source, gen_x86_64.ROUTINES[2])
+        omitted = []
+        second_first, second_last = gen_x86_64.MUL_ROUND_RANGES[1]
+        for pc, instruction in enumerate(parsed.instructions):
+            if not second_first <= pc <= second_last:
+                omitted.append(instruction)
+        self.assertEqual(Counter(omitted), Counter({
+            instruction: comments[instruction] for instruction in omitted
+        }))
 
     def test_declared_pointer_blocks_are_readonly(self):
         for config in (gen_x86_64.ROUTINES[2], gen_x86_64.ROUTINES[4]):
@@ -471,20 +543,38 @@ class SharedGeneratorTests(unittest.TestCase):
         self.assertTrue(any(entry.get("group_fact", entry["fact"])[0] == "x86_mulx"
                             for entry in x86_prepared.entries))
 
-    def test_shared_skeleton_has_no_architecture_dispatch_or_isa_fact_rules(self):
-        source = gen.Path(gen.__file__).read_text()
-        skeleton_source = source[source.index("def skeleton(routine):"):
-                                 source.index("def _strip_annotations")]
-        self.assertNotIn("routine.architecture", skeleton_source)
-        for isa_fact in (
-            "x86_adds", "x86_subs", "x86_mulx", "x86_neg", "x86_xor",
-            "subs_carry", "subc_carry_cases", "sbb_borrow_le_one",
-        ):
-            with self.subTest(fact=isa_fact):
-                self.assertNotIn(isa_fact, skeleton_source)
-        self.assertIn('elif kind == "select":', skeleton_source)
-        self.assertIn('elif kind == "mul":', skeleton_source)
-        self.assertIn('elif kind == "lsr":', skeleton_source)
+    def test_skeleton_facts_come_from_the_routine_backend(self):
+        # The shared traversal knows the common facts; an ISA-specific one reaches it only
+        # through the routine's backend hook, and one that no hook handles is an error.
+        class StubBackend(gen.SkeletonBackend):
+            def fact(self, kind, ops, context):
+                if kind != "stub":
+                    return False
+                (operand,) = ops
+                context.eq(context.name, f"stub {operand}")
+                context.lines.append(f"  have b_{context.name} : {context.name} < 2^64 := by sorry")
+                context.bnd[context.name] = f"b_{context.name}"
+                return True
+
+        def routine(backend):
+            emitter = gen.Emitter()
+            emitter.bind("x", "lhs.l0", "argument", reads=(), load=True,
+                         fact=("load", "lhs", "l0"))
+            emitter.bind("y", "stub x", "stub x", reads={"x"}, fact=("stub", "x"))
+
+            class StubRoutine(gen.Routine):
+                architecture = "Stub"
+                skeleton_backend = backend
+
+            return StubRoutine("doc", "def stub", emitter.render(["y"]), "  y", "stub",
+                               emitter, ["y"])
+
+        skeleton = "\n".join(gen.skeleton(routine(StubBackend())))
+        self.assertIn("have e_x : x = lhs.l0 := rfl", skeleton)
+        self.assertIn("have e_y : y = stub x := rfl", skeleton)
+        self.assertIn("have b_y : y < 2^64 := by sorry", skeleton)
+        with self.assertRaisesRegex(ValueError, "unsupported skeleton fact stub"):
+            gen.skeleton(routine(gen.SkeletonBackend()))
 
     def test_backward_liveness_and_backend_retention_share_the_same_ir(self):
         emitter = gen.Emitter()
@@ -513,7 +603,7 @@ class SharedGeneratorTests(unittest.TestCase):
         routines = {routine.name: routine for routine in gen_x86_64.all_routines()}
         # Every retained binding is extracted exactly once, equal values included (the three
         # zeros of an `xor r, r`, a repeated `mov` from `rdx`), since merging is off.
-        for name in ("squareLo", "mulMont", "fromMont"):
+        for name in ("squareLo", "mulMontRound", "fromMont"):
             with self.subTest(routine=name):
                 routine = routines[name]
                 prepared = gen_x86_64.SKELETON_BACKEND.prepare(
@@ -534,20 +624,44 @@ class SharedGeneratorTests(unittest.TestCase):
         self.assertIn("extract_lets -merge +onlyGivenNames s_2 z4_1 cf_5 at hr", square_lo)
         self.assertNotIn("obtain ⟨cf_5, b_cf_5, l_z4_1⟩", square_lo)
 
+        mul_round_routine = routines["mulMontRound"]
+        mul_round = "\n".join(gen.skeleton(mul_round_routine))
+        # The factored round is rendered like every other block: an instruction's pair wrapper
+        # and its two projections, extracted together, and read under their own names.
+        self.assertIn("extract_lets -merge +onlyGivenNames m s2 s1_1 at hr", mul_round)
+        self.assertIn("extract_lets -merge +onlyGivenNames s r0_1 cf_1 at hr", mul_round)
+        self.assertIn("have e_r0_1 : r0_1 = (addc r0 s1_1 cf).1 := rfl", mul_round)
+        self.assertIn("have e_cf_1 : cf_1 = (addc r0 s1_1 cf).2 := rfl", mul_round)
+        # The round's and the calling block's local definitions stay transparent.
+        self.assertNotIn("clear_value", mul_round)
+        self.assertNotIn("clear_value", "\n".join(gen.skeleton(routines["mulMont"])))
+        helper_text = "\n".join(code for code, _ in mul_round_routine.lines)
+        self.assertIn("let m := mulx b lhs.l0", helper_text)
+        self.assertIn("let s := addc r0 s1 cf", helper_text)
+        self.assertIn("let r0 := s.1", helper_text)
+        self.assertIn("let cf := s.2", helper_text)
+        # The omitted entry load aliases RDX to b only until the source writes RDX again.
+        # Reduction products must use the rebound Montgomery quotient, never b.
+        expressions = [entry["expr"] for entry in mul_round_routine.emitter.entries]
+        quotient_index = expressions.index("mulLo rdx inv")
+        self.assertTrue(any("mulx rdx modulus.l1" in expr for expr in expressions[quotient_index:]))
+        self.assertFalse(any("mulx b modulus.l1" in expr for expr in expressions[quotient_index:]))
+
         from_mont = "\n".join(gen.skeleton(routines["fromMont"]))
         self.assertIn("extract_lets -merge +onlyGivenNames n z0_1 cf at hr", from_mont)
         self.assertIn("have e_z0_1 : z0_1 = (neg z0).1 := rfl", from_mont)
         self.assertIn("have e_cf : cf = (neg z0).2 := rfl", from_mont)
+        self.assertIn("clear_value", from_mont)
 
     def test_transcription_snapshots_match_committed_files(self):
         self.assertEqual(gen_aarch64.gen_program(), gen_aarch64.OUT_PROGRAM.read_text())
         self.assertEqual(gen_x86_64.gen_program(), gen_x86_64.OUTPUT.read_text())
 
-    def test_all_six_x86_routines_generate_shared_skeletons(self):
+    def test_all_x86_routines_and_factored_round_generate_shared_skeletons(self):
         routines = gen_x86_64.all_routines()
         self.assertEqual(
             [routine.name for routine in routines],
-            ["addMod", "subMod", "mulMont", "squareLo", "squareHi", "fromMont"],
+            ["addMod", "subMod", "mulMontRound", "mulMont", "squareLo", "squareHi", "fromMont"],
         )
         for routine in routines:
             with self.subTest(routine=routine.name):
@@ -559,6 +673,24 @@ class SharedGeneratorTests(unittest.TestCase):
                 self.assertEqual(generated[-1], "  subst hr")
                 self.assertIs(gen.find_routine(f"X86_64:{routine.name}").emitter.__class__,
                               routine.emitter.__class__)
+
+    def test_round_argument_fields_are_routine_local(self):
+        aarch_round = next(
+            routine for routine in gen_aarch64.all_routines() if routine.name == "mulMontRound"
+        )
+        x86_round = next(
+            routine for routine in gen_x86_64.all_routines() if routine.name == "mulMontRound"
+        )
+        self.assertEqual(aarch_round.arg_fields["acc"], [
+            "r0", "r1", "r2", "r3", "r4", "q", "t1", "t3",
+        ])
+        self.assertEqual(x86_round.arg_fields["acc"], [
+            "r0", "r1", "r2", "r3", "r4", "q",
+        ])
+        self.assertEqual(gen.proj("acc", "q", aarch_round.arg_fields), "2.2.2.2.2.1")
+        self.assertEqual(gen.proj("acc", "q", x86_round.arg_fields), "2.2.2.2.2")
+        self.assertEqual(gen.proj("acc", "r4", aarch_round.arg_fields), "2.2.2.2.1")
+        self.assertEqual(gen.proj("acc", "r4", x86_round.arg_fields), "2.2.2.2.1")
 
     def test_bare_skeleton_lookup_retains_aarch64_legacy(self):
         self.assertEqual(gen.find_routine("addMod").architecture, "AArch64")
@@ -622,6 +754,7 @@ class SkeletonCheckerTests(unittest.TestCase):
             self.assertIn("cannot read proof file", diagnostics.getvalue())
 
     def test_manifest_selects_existing_files_and_rejects_mismatched(self):
+        add_path = gen.ROOT / "lean/PastaAsm/X86_64/Spec/Add.lean"
         available = gen.architecture_routines()
         for name, (arch, expected_names) in gen.SPEC_MANIFEST.items():
             with self.subTest(path=name):
@@ -635,6 +768,8 @@ class SkeletonCheckerTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(ValueError, "pending migration"):
                         gen.parse_spec_manifest(str(manifest_path))
+        with self.assertRaisesRegex(ValueError, "belongs to X86_64, not AArch64"):
+            gen.parse_spec_manifest(f"AArch64:{add_path}")
 
 
 if __name__ == "__main__":
