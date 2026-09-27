@@ -8,6 +8,7 @@ import PastaAsm.Compositions
 import PastaAsm.Spec
 import PastaAsm.Inversion.Divstep
 import PastaAsm.Inversion.Packed
+import PastaAsm.Inversion.Divstep59
 import PastaAsm.AArch64
 import PastaAsm.X86_64
 
