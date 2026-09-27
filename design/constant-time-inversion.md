@@ -102,24 +102,26 @@ Shared, ISA-independent ([the proof](constant-time-inversion-proof.md) gives the
    being defined as a linear image of `S_{1/2}` (with a factor `33/32` for `|δ| ≥ 5/2`); the
    shrink factor `λ' = 30902639/41749730`; and three exact checks. (a) Eight inclusions
    `M S_δ ⊆ λ'^k S_δ'` for the step maps `M_{−1} (x, y) = (y, (y − x)/2)`,
-   `M_1 (x, y) = (x, (y + x)/2)`, and `M_0 (x, y) = (x, y/2)`, each 80 corners against 80
-   edges; every other transition is an equality by definition or follows from convexity. (b)
-   The initial containment: the triangle `0 ≤ y ≤ x ≤ 1` scaled by `2753/4096` lies in
-   `Hull S_{1/2}`, so `0 ≤ g ≤ f ≤ 2^b` gives `(f/H, g/H) ∈ Hull S_{1/2}` for
-   `H = 2^b · 4096/2753`. (c) A lattice-point endgame: with `L = 3047/2048` the scaled hulls
-   contain no integer point with `y ≠ 0`, checked through an outer box and the enumeration of
-   the few candidate points, so that once `2^b λ'^n ≤ L · 2753/4096` the state has `g_n = 0`.
-   The simpler endgame (`|x| < 1` or `|y| < 1` after `n` steps) fails at `n = 590` and first
-   passes at 591, so it is not used; for `b = 256` and `n = 590` the slack is about 5 %. An
-   independent re-check in exact rational arithmetic (`check_hull.py`, to be tracked and run in
-   CI) passes every check: 739 hull tests, about 53,000 half-plane evaluations, operands up to
-   130 bits, in under a second. In Lean: the corner lists as rational data, a decidable
-   point-in-convex-polygon test by edge half-planes, a Boolean `check` in the HOL Light shape,
-   and the theorem `check c = true → TerminationBound b`, ported from Harrison's proof; the
-   range of `δ` is handled by the definitional formula and lemmas, not by a finite table. The
-   triangle covers only `g ≤ f`. For the square, which would admit a non-canonical `x` up to
-   `2^256`, the largest admissible scale is `5193/8192`. With that scale 590 steps fail by
-   0.19 % and 591 pass, so the input stays canonical.
+   `M_1 (x, y) = (x, (y + x)/2)`, and `M_0 (x, y) = (x, y/2)`, each certified half-plane by
+   half-plane with two Farkas multipliers; every other transition is an equality by definition
+   or follows from convexity. (b) The initial containment: the triangle `0 ≤ y ≤ x ≤ 1` scaled
+   by `2753/4096` lies in `Hull S_{1/2}`, so `0 ≤ g ≤ f ≤ 2^b` gives
+   `(f/H, g/H) ∈ Hull S_{1/2}` for `H = 2^b · 4096/2753`. (c) A lattice-point endgame: with
+   `L = 3047/2048` the scaled hulls contain no integer point with `y ≠ 0`, checked through an
+   outer box and the enumeration of the few candidate points, so that once
+   `2^b λ'^n ≤ L · 2753/4096` the state has `g_n = 0`. The simpler endgame (`|x| < 1` or
+   `|y| < 1` after `n` steps) fails at `n = 590` and first passes at 591, so it is not used;
+   for `b = 256` and `n = 590` the slack is about 5 %. In Lean, done: the half-planes and the
+   Farkas records are generated data (`HullData.lean`, from
+   `lean/scripts/hull_certificate.json` by `gen_hull.py`); the inclusion checks are evaluated
+   by the kernel (`HullCert.lean`); and the argument over abstract regions, following
+   Harrison's structure, ends in `terminationBound_of_certified` (`HullBound.lean`), with the
+   range of `δ` handled by the definitional formula and lemmas rather than a finite table.
+   `verify_hull_certificate.py` re-checks the JSON independently in exact arithmetic (724
+   Farkas records, 16 lattice points, under a second), in CI. The triangle covers only `g ≤ f`.
+   For the square, which would admit a non-canonical `x` up to `2^256`, the largest admissible
+   scale is `5193/8192`. With that scale 590 steps fail by 0.19 % and 591 pass, so the input
+   stays canonical.
 
 Per ISA:
 
@@ -151,8 +153,8 @@ Portable Rust:
   merge-ready without it.
 - **M8** Aeneas for the portable Rust (stretch).
 
-Draft commits may carry `sorry` where the hole is named here (obligation 5 until M7 lands); the
-PR that goes to merge carries none, and CI's axiom census remains the check.
+Draft commits may carry `sorry` where the hole is named here (none at present); the PR that
+goes to merge carries none, and CI's axiom census remains the check.
 
 ## Aeneas
 
@@ -165,8 +167,6 @@ comes the Nix route is the one to try first.
 
 ## Open issues
 
-- The bound theorem's port from HOL Light is the one open-ended item; the hypothesis form keeps
-  it off the critical path.
 - The correctness theorem needs `p` prime, for `gcd(p, x) = 1` when `0 < x < p`. CompElliptic
   proves both Pasta primes prime by Pratt certificates, but pasta-asm does not depend on
   CompPoly, so the theorem takes primality as a hypothesis until a certificate is vendored or

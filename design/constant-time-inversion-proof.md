@@ -168,8 +168,9 @@ low word of the five-word product is the low word of the true integer, which Lem
 ## 5. What is not covered here
 
 The bound (Theorem 5) and the block-level equalities between each `asm!` block's transcription
-and the word-level functions of §2–§3. The former is Bernstein's hull certificate, checked and
-proved in HOL Light by Harrison, whose proof is to be ported (the plan's obligation 5 describes
-the certificate); the latter are the per-ISA obligations that the skeleton generator and its
-proofs handle, as for the existing blocks. The primality of `p`, which Theorem 12 needs for
+and the word-level functions of §2–§3. The former is proved in Lean from Bernstein's hull
+certificate, following Harrison's HOL Light argument (`HullBound.lean`, with the data in
+`HullData.lean` and the checks in `HullCert.lean`; the plan's obligation 5 describes the
+certificate). The latter are the per-ISA obligations that the skeleton generator and its proofs
+handle, as for the existing blocks. The primality of `p`, which Theorem 12 needs for
 `gcd(p, x) = 1`, is taken as a hypothesis.
