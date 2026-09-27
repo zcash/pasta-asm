@@ -15,8 +15,9 @@ pair are marked as its continuation), over the semantics of `PastaAsm.AArch64.Se
 are rebound by the instructions that write them, `c` is the carry flag, `fl` the four flags, `s` is
 the (result, carry) pair of the instruction that last set both, argument limbs are read where the
 block's operands bind them, and the output words are bound where the block's output operands hold
-them. Bindings that nothing reads are left as comments. See the generator's docstring for what it
-checks.
+them. A block whose template invokes a macro for a repeated step calls that step's definition once
+per invocation. Bindings that nothing reads are left as comments. See the generator's docstring for
+what it checks.
 -/
 
 namespace PastaAsm.AArch64
