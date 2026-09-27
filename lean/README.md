@@ -104,6 +104,8 @@ PastaAsm/Inversion/Termination.lean   the termination bound (Theorem 5) as a pro
 PastaAsm/Inversion/Model.lean         the rounds, `montInvModel`, the round invariant (Lemma 11), and Theorem 12
 PastaAsm/Inversion/Hull.lean          convex regions by half-planes, inclusions by Farkas certificates
 PastaAsm/Inversion/HullBound.lean     the termination bound from a certificate (the hull-light argument)
+PastaAsm/Inversion/HullData.lean      GENERATED: the certificate's half-planes and Farkas records
+PastaAsm/Inversion/HullCert.lean      the certificate checked by the kernel; `terminationBound_256`
 PastaAsm/AArch64.lean                 AArch64 umbrella module
 PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
 PastaAsm/AArch64/Transcription.lean   GENERATED: the blocks and the round
