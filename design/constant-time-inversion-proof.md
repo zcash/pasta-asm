@@ -126,7 +126,8 @@ five signed words and the shifts are exact.
 
     t' = (s + w p) / 2^64 < s / 2^64 + p < 2^251 + 2^61 p / 2^64 + p = 2^251 + 9p/8.
 
-Since `p > 2^251 · 8/7`, this is below `2p`; and `2^251 + 9p/8 < 2^256` since `p < 2^255`. Also
+In integers, `8 t' < 2^254 + 9p`, which is the form the Lean statement uses. Since
+`p > 2^251 · 8/7`, this is below `2p`; and `2^251 + 9p/8 < 2^256` since `p < 2^255`. Also
 `t' ≡ t · 2^{−64} (mod p)`. So `amontred` returns a four-word value below `2^256` congruent to
 `t / 2^64`, and one conditional subtraction of `p` makes it canonical. (s2n-bignum's P-256
 version needs a top-carry check inside `amontred`; the Pasta bound shows none is needed, but a
@@ -167,6 +168,8 @@ low word of the five-word product is the low word of the true integer, which Lem
 ## 5. What is not covered here
 
 The bound (Theorem 5) and the block-level equalities between each `asm!` block's transcription
-and the word-level functions of §2–§3. The former is a cited theorem to be ported; the latter
-are the per-ISA obligations that the skeleton generator and its proofs handle, as for the
-existing blocks.
+and the word-level functions of §2–§3. The former is Bernstein's hull certificate, checked and
+proved in HOL Light by Harrison, whose proof is to be ported (the plan's obligation 5 describes
+the certificate); the latter are the per-ISA obligations that the skeleton generator and its
+proofs handle, as for the existing blocks. The primality of `p`, which Theorem 12 needs for
+`gcd(p, x) = 1`, is taken as a hypothesis.

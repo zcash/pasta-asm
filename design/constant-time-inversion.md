@@ -89,27 +89,37 @@ Shared, ISA-independent ([the proof](constant-time-inversion-proof.md) gives the
    `(−2^n, 2^n]`), invariance of `gcd` and of `max(|f|, |g|)`.
 2. Packing: the twenty-step packed recurrence on two 64-bit words equals the true matrix, with
    the coefficient parts recoverable from the upper bits under the half-open range.
-3. Five-word arithmetic: `updateFG` is exact; `amontred` returns a value below
-   `2^251 + 9p/8 < 2p` congruent to `t / 2^64`, from `|t| < 2^315` and `2^254 < p < 2^255`.
+3. Five-word arithmetic: `updateFG` is exact; `amontred` returns a value `t'` with
+   `8 t' < 2^254 + 9p`, hence below `2p` and below `2^256`, congruent to `t / 2^64`, from
+   `|t| < 2^315` and `2^254 ≤ p < 2^255`.
 4. The round invariant and the final formula, including `x = 0 ↦ 0`.
 5. Termination: `g = 0` after 590 half-delta divsteps for `0 ≤ g ≤ f < 2^256`, `f` odd. Proved
-   by a hull certificate (the user's decision, 2026-09-27), following the paper's Section 4.3:
-   a finite family of rational point sets `S_δ` (about 80 points each in the "faster proof"
-   variant, with `S_{−1/2}` separate), a rational shrink factor `λ' = 30902639/41749730`, and
-   three checks that are exact finite computations: (a) for every corner `(x, y)` of `S_δ`, the
-   images under `M_{−1} (x, y) = (y, (y − x)/2)` if `δ > 0`, `M_1 (x, y) = (x, (y + x)/2)` if
-   `δ ≤ 0`, and `M_0 (x, y) = (x, y/2)` lie in `Hull (λ' S_{δ'})` for the corresponding `δ'`;
-   (b) the initial containment `0 ≤ g ≤ f ≤ 2^b ⟹ (f/H, g/H) ∈ Hull S_{1/2}` for `H = c · 2^b`;
-   (c) the endgame: after `n` steps every point of `H · λ'^n · Hull S_δ` has `|x| < 1` or
-   `|y| < 1`, so `g_n = 0`. Convexity lifts (a) from corners to hulls, and a
-   `(9437 b + 1)/4096`-step induction gives Theorem 5. In Lean: a `HullCertificate` structure,
-   a decidable point-in-convex-polygon test by edge half-planes over `ℚ` (or `ℤ` after
-   scaling), a Boolean `check`, the theorem `check c = true → TerminationBound b`, and the
-   certificate data taken from the paper's supplement (`theorem1/`, HOL Light; the data must be
-   re-extracted, not the proof). Cost: on the order of `10^6` rational operations under
-   `decide`; if the kernel is slow on `ℚ`, scale to `ℤ`. The supplement's location has to be
-   confirmed (the paper says `https://gcd.cr.yp.to`, whose pages fetched on 2026-09-27 still
-   date from 2020).
+   by a hull certificate (the user's decision, 2026-09-27). The certificate is Bernstein's
+   "hull light" data of 2023 (`https://cr.yp.to/2023/hull-light-20230416.sage`, public domain),
+   whose check and proof in HOL Light are in `jrh13/hol-light` under `Divstep/` (Harrison); the
+   paper's Section 4.3 describes the same argument, and its site has no separate supplement.
+   Its shape: two explicit 80-point rational hulls `S_{1/2}` and `S_{−1/2}`, every other `S_δ`
+   being defined as a linear image of `S_{1/2}` (with a factor `33/32` for `|δ| ≥ 5/2`); the
+   shrink factor `λ' = 30902639/41749730`; and three exact checks. (a) Eight inclusions
+   `M S_δ ⊆ λ'^k S_δ'` for the step maps `M_{−1} (x, y) = (y, (y − x)/2)`,
+   `M_1 (x, y) = (x, (y + x)/2)`, and `M_0 (x, y) = (x, y/2)`, each 80 corners against 80
+   edges; every other transition is an equality by definition or follows from convexity. (b)
+   The initial containment: the triangle `0 ≤ y ≤ x ≤ 1` scaled by `2753/4096` lies in
+   `Hull S_{1/2}`, so `0 ≤ g ≤ f ≤ 2^b` gives `(f/H, g/H) ∈ Hull S_{1/2}` for
+   `H = 2^b · 4096/2753`. (c) A lattice-point endgame: with `L = 3047/2048` the scaled hulls
+   contain no integer point with `y ≠ 0`, checked through an outer box and the enumeration of
+   the few candidate points, so that once `2^b λ'^n ≤ L · 2753/4096` the state has `g_n = 0`.
+   The simpler endgame (`|x| < 1` or `|y| < 1` after `n` steps) fails at `n = 590` and first
+   passes at 591, so it is not used; for `b = 256` and `n = 590` the slack is about 5 %. An
+   independent re-check in exact rational arithmetic (`check_hull.py`, to be tracked and run in
+   CI) passes every check: 739 hull tests, about 53,000 half-plane evaluations, operands up to
+   130 bits, in under a second. In Lean: the corner lists as rational data, a decidable
+   point-in-convex-polygon test by edge half-planes, a Boolean `check` in the HOL Light shape,
+   and the theorem `check c = true → TerminationBound b`, ported from Harrison's proof; the
+   range of `δ` is handled by the definitional formula and lemmas, not by a finite table. The
+   triangle covers only `g ≤ f`. For the square, which would admit a non-canonical `x` up to
+   `2^256`, the largest admissible scale is `5193/8192`. With that scale 590 steps fail by
+   0.19 % and 591 pass, so the input stays canonical.
 
 Per ISA:
 
@@ -136,8 +146,9 @@ Portable Rust:
 - **M4** AArch64 blocks; generator extensions; obligation 6 for AArch64; `invert_entry_spec`.
 - **M5** x86-64 blocks; the same.
 - **M6** replace #10's inversion (str4d's call); docs, CI, README's coverage statements; PR.
-- **M7** the termination bound by hull certificate (obligation 5): independent of M3–M5, can
-  run in parallel; the PR is not merge-ready without it.
+- **M7** the termination bound by hull certificate (obligation 5), and the CI step that runs
+  the exact re-check of its data: independent of M3–M5, can run in parallel; the PR is not
+  merge-ready without it.
 - **M8** Aeneas for the portable Rust (stretch).
 
 Draft commits may carry `sorry` where the hole is named here (obligation 5 until M7 lands); the
@@ -152,10 +163,14 @@ pins `v4.30.0` with Mathlib `c5ea0035`. So the translated Rust can join our Lean
 pasta-asm moves to 4.31, a routine monthly bump. Nothing to install until M3; when the time
 comes the Nix route is the one to try first.
 
-## Risks and open questions
+## Open issues
 
-- The bound theorem's port is the one open-ended item; the hypothesis form keeps it off the
-  critical path.
+- The bound theorem's port from HOL Light is the one open-ended item; the hypothesis form keeps
+  it off the critical path.
+- The correctness theorem needs `p` prime, for `gcd(p, x) = 1` when `0 < x < p`. CompElliptic
+  proves both Pasta primes prime by Pratt certificates, but pasta-asm does not depend on
+  CompPoly, so the theorem takes primality as a hypothesis until a certificate is vendored or
+  the fact is taken from the consumer.
 - `divstep59` in s2n-bignum is a 605-instruction macro. The transcription is straight-line and
   the proof is per step, but the generator will need the new instruction semantics before
   anything else.
