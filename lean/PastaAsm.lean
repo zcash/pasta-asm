@@ -13,6 +13,7 @@ import PastaAsm.Inversion.Round
 import PastaAsm.Inversion.Termination
 import PastaAsm.Inversion.Model
 import PastaAsm.Inversion.Hull
+import PastaAsm.Inversion.HullBound
 import PastaAsm.AArch64
 import PastaAsm.X86_64
 
