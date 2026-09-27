@@ -101,7 +101,8 @@ PastaAsm/Inversion/Packed.lean        divsteps on packed words: the batch equals
 PastaAsm/Inversion/Divstep59.lean     the 59-step block on low words: three batches and their product
 PastaAsm/Inversion/Round.lean         the round arithmetic: five-word `updateFG`, `amontred`, `updateUV`, `finalU`
 PastaAsm/Inversion/Termination.lean   the termination bound (Theorem 5) as a proposition
-PastaAsm/Inversion/Model.lean         the rounds, `montInvModel`, and the round invariant (Lemma 11)
+PastaAsm/Inversion/Model.lean         the rounds, `montInvModel`, the round invariant (Lemma 11), and Theorem 12
+PastaAsm/Inversion/Hull.lean          convex regions by half-planes, inclusions by Farkas certificates
 PastaAsm/AArch64.lean                 AArch64 umbrella module
 PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
 PastaAsm/AArch64/Transcription.lean   GENERATED: the blocks and the round
