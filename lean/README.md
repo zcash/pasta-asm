@@ -99,6 +99,7 @@ PastaAsm/VectorCheck.lean             a backend's routines, and the vectors it f
 PastaAsm/Inversion/Divstep.lean       half-delta divsteps on integers: the step matrix and its bounds
 PastaAsm/Inversion/Packed.lean        divsteps on packed words: the batch equals the true matrix
 PastaAsm/Inversion/Divstep59.lean     the 59-step block on low words: three batches and their product
+PastaAsm/Inversion/Round.lean         the round arithmetic: five-word `updateFG`, `amontred`, `updateUV`, `finalU`
 PastaAsm/AArch64.lean                 AArch64 umbrella module
 PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
 PastaAsm/AArch64/Transcription.lean   GENERATED: the blocks and the round
