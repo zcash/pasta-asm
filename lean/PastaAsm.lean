@@ -6,6 +6,7 @@ import PastaAsm.Semantics
 import PastaAsm.Fields
 import PastaAsm.Compositions
 import PastaAsm.Spec
+import PastaAsm.Inversion.Divstep
 import PastaAsm.AArch64
 import PastaAsm.X86_64
 
