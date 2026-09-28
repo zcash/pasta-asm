@@ -180,6 +180,9 @@ if_supported! {
     extern crate std;
 
     #[cfg(test)]
+    mod test_fields;
+
+    #[cfg(test)]
     mod tests;
 
     mod entry;
