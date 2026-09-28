@@ -66,10 +66,10 @@ What is trusted, beyond Lean's kernel and standard axioms:
    expanding the macros that a block invokes for a repeated step, and the operand declarations;
    CI regenerates and diffs.
 3. The Rust mirrored in `PastaAsm/AArch64/Compositions.lean` and `PastaAsm/X86_64/Compositions.lean`:
-   the compositions `sqr_n_mul` and `from_mont`, and on AArch64 the inversion's driver
-   `invert`; and in `PastaAsm/Compositions.lean`: the shared canonicity check `is_canonical`
-   and the condition `mul_contract` that `mul` asserts. Short, and checked against the Rust by
-   inspection.
+   the compositions `sqr_n_mul` and `from_mont`; and in `PastaAsm/Compositions.lean`: the
+   shared canonicity check `is_canonical`, the condition `mul_contract` that `mul` asserts, and
+   the inversion's driver `invert` over a record of a backend's six blocks, which the AArch64
+   module instantiates. Short, and checked against the Rust by inspection.
 4. The reference vectors: outputs of the real assembly on an Apple M-series machine, at
    pasta_curves commit `8ad85e9fab7929f6236960e472f432a4bd9ccd74`, embedded as kernel-checked
    examples (`decide +kernel`). These are concrete closed facts that any independent run of
@@ -94,7 +94,7 @@ For x86-64, CF/OF availability is checked by the generator as described above.
 ```
 PastaAsm.lean                         root module, imports everything below
 PastaAsm/Semantics.lean               shared 64-bit arithmetic and limb representation
-PastaAsm/Compositions.lean            shared operand comparisons and contracts
+PastaAsm/Compositions.lean            shared operand checks and contracts; `invert` over a backend's blocks
 PastaAsm/Fields.lean                  the two fields and facts about their constants
 PastaAsm/Spec.lean                    shared arithmetic and limb lemmas
 PastaAsm/Vectors.lean                 GENERATED: the reference vectors inside the contracts
@@ -110,6 +110,8 @@ PastaAsm/Inversion/Hull.lean          convex regions by half-planes, inclusions 
 PastaAsm/Inversion/HullBound.lean     the termination bound from a certificate (the hull-light argument)
 PastaAsm/Inversion/HullData.lean      GENERATED: the certificate's half-planes and Farkas records
 PastaAsm/Inversion/HullCert.lean      the certificate checked by the kernel; `terminationBound_256`
+PastaAsm/Inversion/SignMag.lean       the sign-magnitude form of a matrix entry, as the row blocks take it
+PastaAsm/Inversion/Composition.lean   `InvertBlocks.Spec`, and `invert` equals the model over blocks that meet it
 PastaAsm/AArch64.lean                 AArch64 umbrella module
 PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
 PastaAsm/AArch64/Transcription.lean   GENERATED: the blocks and their factored rounds
@@ -280,9 +282,12 @@ The inversion's blocks, each equated with the word-level function of the shared 
 * `divstep59Block_spec` (proved): the block's three batches compute `divstep59`'s `d` and the
   entries of the 59-step matrix modulo `2^64`. The assembly's negated decoder is absorbed by
   the recurrence's sign symmetry.
-* `invert_eq_model` (proved): the composition `invert` of `AArch64/Compositions.lean`, which
-  mirrors the Rust driver, computes `montInvModel`. Each round carries the model's state by the
-  block theorems, whose bounds come from the model's round invariant.
+* `invert_eq_model` (proved, in `Inversion/Composition.lean`): the composition `invert` of
+  `PastaAsm/Compositions.lean`, which mirrors the Rust driver over a record of the six blocks,
+  computes `montInvModel` for any backend whose blocks meet `InvertBlocks.Spec`, the record of
+  the six statements above. Each round carries the model's state by those statements, whose
+  bounds come from the model's round invariant. `invertBlocks_spec` instantiates the record for
+  the AArch64 blocks.
 
 The crate's entry points, in `Entry.lean`: `mul_entry_spec`, `square_entry_spec`,
 `sqrNMul_entry_spec`, `fromMont_entry_spec`, `add_entry_spec`, and `sub_entry_spec` (all
@@ -313,8 +318,8 @@ against a step-by-step trace of one batch. The proofs cover:
   multiplication;
 * the addition and subtraction blocks for every pair of operands on which they are exact, with
   their corollaries for a lazily reduced left operand and for canonical operands;
-* the inversion's six blocks against the word-level functions of the shared layer, and the
-  AArch64 `invert` as their composition against `montInvModel`;
+* the inversion's six blocks against the word-level functions of the shared layer, and `invert`
+  over any backend's blocks against `montInvModel`, instantiated for AArch64;
 * from those, the six Montgomery entry points at either field under the conditions they
   assert, and `invert` at either field with the primality of the modulus as a hypothesis.
 

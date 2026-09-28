@@ -61,9 +61,12 @@ model.
 ## Where things live
 
 - **Lean model and proofs: pasta-asm, `lean/PastaAsm/Inversion/`** (shared), with per-ISA block
-  equality theorems in `lean/PastaAsm/{AArch64,X86_64}/Spec/Invert*.lean`. The shared theorem
-  `montInv_spec` is about `montInvModel`, the composition of the word-level functions; each ISA
-  proves its transcribed blocks equal to those functions and its `invert` equal to the model.
+  equality theorems in `lean/PastaAsm/{AArch64,X86_64}/Spec/*.lean`. The shared theorem
+  `montInv_spec` is about `montInvModel`, the composition of the word-level functions. The
+  composition `invert` of the blocks is one Lean definition over a record of a backend's
+  blocks, proved equal to the model once from the record of their specifications, so each ISA
+  proves its transcribed blocks equal to the word-level functions and instantiates the two
+  records.
 - **AArch64 and x86-64 blocks: pasta-asm**, register-only `asm!` blocks adapted from
   s2n-bignum's ARM and x86 `bignum_montinv_p256` with the Pasta constants and the Pasta
   `amontred` (the modulus shape `modulus[2] = 0`, `modulus[3] = 2^62` replaces P-256's), under
@@ -128,8 +131,13 @@ Per ISA:
 6. Each `asm!` block's generated transcription equals the corresponding word-level function.
    The generator needs the instructions the blocks use: AArch64 `ccmp`, `cneg`, `tst`, `sbfx`,
    `mneg`, `msub`, `csetm`; x86-64 `cmov` forms, `test`, `imul` (signed), `sar`, `neg`.
-7. The Rust driver's composition equals `montInvModel` (mirrored in `Compositions.lean`, as
-   now).
+
+Shared, over any ISA's blocks:
+
+7. The driver's composition equals `montInvModel`. The driver is one Rust function over a
+   backend's blocks, mirrored once in `Compositions.lean` over a record of the blocks and
+   proved equal to the model from the record of the block specifications
+   (`Inversion/Composition.lean`); an ISA instantiates the two records.
 
 Portable Rust:
 

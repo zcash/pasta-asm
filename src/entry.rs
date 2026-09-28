@@ -268,5 +268,5 @@ pub fn invert(x: &Limbs, modulus: &Limbs, inv: u64, v0: &Limbs) -> Limbs {
         is_canonical(x, modulus),
         "pasta_asm::invert requires a canonical input"
     );
-    crate::aarch64::invert(x, modulus, inv, v0)
+    crate::inversion::invert(x, modulus, inv, v0)
 }
