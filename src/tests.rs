@@ -354,14 +354,88 @@ fn from_mont_known_answers() {
     );
 }
 
+/// A Montgomery inverse computed independently of the crate's routines, by Fermat's little
+/// theorem over a plain Montgomery multiplication in `u128` arithmetic (textbook CIOS with a
+/// six-limb accumulator, for canonical operands, as pasta_curves' portable backend multiplies).
+#[cfg(target_arch = "aarch64")]
+mod reference {
+    use super::Limbs;
+
+    /// `lhs * rhs * 2^-256 mod p` for canonical operands, canonical.
+    fn mont_mul(lhs: &Limbs, rhs: &Limbs, modulus: &Limbs, inv: u64) -> Limbs {
+        let mut t = [0u64; 6];
+        for &b in rhs {
+            let mut carry = 0u128;
+            for j in 0..4 {
+                let v = u128::from(t[j]) + u128::from(lhs[j]) * u128::from(b) + carry;
+                t[j] = v as u64;
+                carry = v >> 64;
+            }
+            let v = u128::from(t[4]) + carry;
+            t[4] = v as u64;
+            t[5] = (v >> 64) as u64;
+            let m = t[0].wrapping_mul(inv);
+            let v = u128::from(t[0]) + u128::from(m) * u128::from(modulus[0]);
+            let mut carry = v >> 64;
+            for j in 1..4 {
+                let v = u128::from(t[j]) + u128::from(m) * u128::from(modulus[j]) + carry;
+                t[j - 1] = v as u64;
+                carry = v >> 64;
+            }
+            let v = u128::from(t[4]) + carry;
+            t[3] = v as u64;
+            t[4] = t[5] + (v >> 64) as u64;
+        }
+        // The candidate is below `2p`; subtract `p` unless that borrows past its top word.
+        let mut out = [t[0], t[1], t[2], t[3]];
+        let mut borrow = false;
+        let mut diff = [0u64; 4];
+        for i in 0..4 {
+            let (d, b1) = out[i].overflowing_sub(modulus[i]);
+            let (d, b2) = d.overflowing_sub(u64::from(borrow));
+            diff[i] = d;
+            borrow = b1 | b2;
+        }
+        if t[4] != 0 || !borrow {
+            out = diff;
+        }
+        out
+    }
+
+    /// The Montgomery inverse of the Montgomery residue `x`: `x^(p-2)` in the Montgomery
+    /// domain, starting from `R`, the Montgomery form of `1`.
+    pub(super) fn montgomery_inverse(
+        x: &Limbs,
+        modulus: &Limbs,
+        inv: u64,
+        r: &Limbs,
+        pm2: &Limbs,
+    ) -> Limbs {
+        let mut acc = *r;
+        for bit in (0..256).rev() {
+            acc = mont_mul(&acc, &acc, modulus, inv);
+            if (pm2[bit / 64] >> (bit % 64)) & 1 == 1 {
+                acc = mont_mul(&acc, x, modulus, inv);
+            }
+        }
+        acc
+    }
+}
+
 /// `z = invert(x)` is canonical and is the Montgomery inverse of a nonzero `x`:
-/// `mul(x, z) = R`, and inverting `z` gives `x` back.
+/// `mul(x, z) = R`, inverting `z` gives `x` back, and `z` is the inverse that the independent
+/// Fermat computation gives.
 #[cfg(target_arch = "aarch64")]
 fn check_inverse(f: &Field, x: &Limbs) {
     let z = invert(x, &f.modulus, f.inv, &f.v0);
     assert!(super::is_canonical(&z, &f.modulus), "{x:x?}");
     assert_eq!(mul(x, &z, &f.modulus, f.inv), f.r, "{x:x?}");
     assert_eq!(invert(&z, &f.modulus, f.inv, &f.v0), *x, "{x:x?}");
+    assert_eq!(
+        z,
+        reference::montgomery_inverse(x, &f.modulus, f.inv, &f.r, &f.pm2),
+        "{x:x?}"
+    );
 }
 
 /// `invert` reproduces the integer model of the algorithm on the recorded inputs, which include
