@@ -61,9 +61,12 @@ model.
 ## Where things live
 
 - **Lean model and proofs: pasta-asm, `lean/PastaAsm/Inversion/`** (shared), with per-ISA block
-  equality theorems in `lean/PastaAsm/{AArch64,X86_64}/Spec/Invert*.lean`. The shared theorem
-  `montInv_spec` is about `montInvModel`, the composition of the word-level functions; each ISA
-  proves its transcribed blocks equal to those functions and its `invert` equal to the model.
+  equality theorems in `lean/PastaAsm/{AArch64,X86_64}/Spec/*.lean`. The shared theorem
+  `montInv_spec` is about `montInvModel`, the composition of the word-level functions. The
+  composition `invert` of the blocks is one Lean definition over a record of a backend's
+  blocks, proved equal to the model once from the record of their specifications, so each ISA
+  proves its transcribed blocks equal to the word-level functions and instantiates the two
+  records.
 - **AArch64 and x86-64 blocks: pasta-asm**, register-only `asm!` blocks adapted from
   s2n-bignum's ARM and x86 `bignum_montinv_p256` with the Pasta constants and the Pasta
   `amontred` (the modulus shape `modulus[2] = 0`, `modulus[3] = 2^62` replaces P-256's), under
@@ -128,8 +131,13 @@ Per ISA:
 6. Each `asm!` block's generated transcription equals the corresponding word-level function.
    The generator needs the instructions the blocks use: AArch64 `ccmp`, `cneg`, `tst`, `sbfx`,
    `mneg`, `msub`, `csetm`; x86-64 `cmov` forms, `test`, `imul` (signed), `sar`, `neg`.
-7. The Rust driver's composition equals `montInvModel` (mirrored in `Compositions.lean`, as
-   now).
+
+Shared, over any ISA's blocks:
+
+7. The driver's composition equals `montInvModel`. The driver is one Rust function over a
+   backend's blocks, mirrored once in `Compositions.lean` over a record of the blocks and
+   proved equal to the model from the record of the block specifications
+   (`Inversion/Composition.lean`); an ISA instantiates the two records.
 
 Portable Rust:
 
@@ -146,7 +154,12 @@ Portable Rust:
   as a hypothesis; `#eval` of `montInvModel` agrees with the Python model on the vectors.
 - **M3** portable Rust against the Lean definitions; vectors; benchmark.
 - **M4** AArch64 blocks; generator extensions; obligation 6 for AArch64; `invert_entry_spec`.
-- **M5** x86-64 blocks; the same.
+- **M5** x86-64 blocks; the same. The AArch64 block proofs separate the instruction plumbing (flags,
+  the conditional instructions, the generated skeletons) from word lemmas that do not depend on the
+  ISA: the two's-complement row identities, the shift by 59, the three cases of a packed step, the
+  decoder arithmetic, and the batch iteration. Those lemmas are in the shared layer
+  (`Inversion/SignMag.lean`, `Inversion/PackedWords.lean`), stated over the shared word
+  operations, so that the x86-64 files carry only the plumbing.
 - **M6** replace #10's inversion (str4d's call); docs, CI, README's coverage statements; PR.
 - **M7** the termination bound by hull certificate (obligation 5), and the CI step that runs
   the exact re-check of its data: independent of M3–M5, can run in parallel; the PR is not
@@ -171,9 +184,6 @@ comes the Nix route is the one to try first.
   proves both Pasta primes prime by Pratt certificates, but pasta-asm does not depend on
   CompPoly, so the theorem takes primality as a hypothesis until a certificate is vendored or
   the fact is taken from the consumer.
-- `divstep59` in s2n-bignum is a 605-instruction macro. The transcription is straight-line and
-  the proof is per step, but the generator will need the new instruction semantics before
-  anything else.
 - Register pressure on x86-64 without `rbp` is not an issue here (the blocks are small), but
   the Apple x86-64 exclusion stays for the multiplication blocks anyway.
 - Whether the last round can skip the `v` computation and the `f,g` update as s2n-bignum does

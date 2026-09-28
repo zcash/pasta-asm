@@ -6,10 +6,12 @@
 This crate provides assembly backends for the Pasta field arithmetic of `pasta_curves`. It
 contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring,
 and modular addition and subtraction, as inline `asm!` blocks, and a repeated-squaring chain and
-conversion out of Montgomery form composed from them. It is low-level cryptographic code. Our
-priorities are **correctness, constant-time behaviour, and performance**, in that order.
+conversion out of Montgomery form composed from them; and, on AArch64, a constant-time inversion
+composed from six more blocks. It is low-level cryptographic code. Our priorities are
+**correctness, constant-time behaviour, and performance**, in that order.
 
-The routines are transcriptions of Supranational's Semolina v0.1.4 (see `README.md`). The
+The Montgomery routines are transcriptions of Supranational's Semolina v0.1.4, and the
+inversion's blocks are adapted from s2n-bignum's `bignum_montinv_p256` (see `README.md`). The
 instruction streams are the object of machine-checked correctness proofs, so a change to an
 instruction is a change to a specification: keep the transcription, its documentation, and
 the proofs in step, and do not "improve" the assembly in passing.
@@ -91,8 +93,9 @@ cd .. && lean/scripts/check.sh   # regenerate the transcription and check the sk
   `lean/scripts/gen.py` from the Rust `asm!` blocks and the reference vectors. Never edit them
   by hand; change the generator or its inputs and regenerate. Architecture-specific
   `Compositions.lean` mirrors the actual Rust compositions, not another backend's implementation.
-  Shared `Compositions.lean` models common operand checks; `Fields.lean` states the two fields'
-  constants. A change on either side changes the other.
+  Shared `Compositions.lean` models common operand checks and the inversion's driver over a
+  record of a backend's blocks; `Fields.lean` states the two fields' constants. A change on
+  either side changes the other.
 - **Every architecture's block proofs use generated, checked skeletons.** Generated skeleton
   lines in `Spec.lean` (or `Spec/*.lean`) are not hand-edited. Only theorem statements and
   `-- BEGIN ... -- END` annotation blocks are hand-written. Skeleton generation and `check_spec`

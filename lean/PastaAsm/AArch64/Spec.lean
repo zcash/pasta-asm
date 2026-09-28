@@ -7,6 +7,14 @@ import PastaAsm.AArch64.Spec.Add
 import PastaAsm.AArch64.Spec.Sub
 import PastaAsm.AArch64.Spec.Mul
 import PastaAsm.AArch64.Spec.Square
+import PastaAsm.AArch64.Spec.CondSub
+import PastaAsm.AArch64.Spec.Amontred
+import PastaAsm.AArch64.Spec.SignMag
+import PastaAsm.AArch64.Spec.UvRow
+import PastaAsm.AArch64.Spec.FgRow
+import PastaAsm.AArch64.Spec.Divstep
+import PastaAsm.AArch64.Spec.Divstep59
+import PastaAsm.AArch64.Spec.Invert
 
 /-!
 # Correctness of the transcribed Pasta Montgomery blocks
