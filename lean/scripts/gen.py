@@ -770,6 +770,7 @@ UNPROVED_ROUTINES = {
         "fgRowBlock",
         "uvRowBlock",
         "amontredBlock",
+        "condSubBlock",
     ),
 }
 
