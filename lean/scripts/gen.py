@@ -757,6 +757,7 @@ SPEC_MANIFEST = {
     "lean/PastaAsm/AArch64/Spec/Sub.lean": ("AArch64", ("subMod",)),
     "lean/PastaAsm/AArch64/Spec/Mul.lean": ("AArch64", ("mulMont", "mulMontRound")),
     "lean/PastaAsm/AArch64/Spec/Square.lean": ("AArch64", ("sqrMont",)),
+    "lean/PastaAsm/AArch64/Spec/CondSub.lean": ("AArch64", ("condSubBlock",)),
     "lean/PastaAsm/X86_64/Spec/Add.lean": ("X86_64", ("addMod",)),
     "lean/PastaAsm/X86_64/Spec/Sub.lean": ("X86_64", ("subMod",)),
     "lean/PastaAsm/X86_64/Spec/FromMont.lean": ("X86_64", ("fromMont",)),
@@ -775,7 +776,6 @@ UNPROVED_ROUTINES = {
         "fgRowBlock",
         "uvRowBlock",
         "amontredBlock",
-        "condSubBlock",
     ),
 }
 

@@ -7,6 +7,7 @@ import PastaAsm.AArch64.Spec.Add
 import PastaAsm.AArch64.Spec.Sub
 import PastaAsm.AArch64.Spec.Mul
 import PastaAsm.AArch64.Spec.Square
+import PastaAsm.AArch64.Spec.CondSub
 
 /-!
 # Correctness of the transcribed Pasta Montgomery blocks
