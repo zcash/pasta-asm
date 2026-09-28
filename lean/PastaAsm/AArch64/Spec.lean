@@ -14,6 +14,7 @@ import PastaAsm.AArch64.Spec.UvRow
 import PastaAsm.AArch64.Spec.FgRow
 import PastaAsm.AArch64.Spec.Divstep
 import PastaAsm.AArch64.Spec.Divstep59
+import PastaAsm.AArch64.Spec.Invert
 
 /-!
 # Correctness of the transcribed Pasta Montgomery blocks
