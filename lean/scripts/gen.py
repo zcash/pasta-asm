@@ -763,6 +763,7 @@ SPEC_MANIFEST = {
     "lean/PastaAsm/AArch64/Spec/UvRow.lean": ("AArch64", ("uvRowBlock",)),
     "lean/PastaAsm/AArch64/Spec/FgRow.lean": ("AArch64", ("fgRowBlock",)),
     "lean/PastaAsm/AArch64/Spec/Divstep.lean": ("AArch64", ("divstepRound", "divstepLast")),
+    "lean/PastaAsm/AArch64/Spec/Divstep59.lean": ("AArch64", ("divstep59Block",)),
     "lean/PastaAsm/X86_64/Spec/Add.lean": ("X86_64", ("addMod",)),
     "lean/PastaAsm/X86_64/Spec/Sub.lean": ("X86_64", ("subMod",)),
     "lean/PastaAsm/X86_64/Spec/FromMont.lean": ("X86_64", ("fromMont",)),
@@ -770,11 +771,9 @@ SPEC_MANIFEST = {
     "lean/PastaAsm/X86_64/Spec/Square.lean": ("X86_64", ("squareLo", "squareHi")),
 }
 
-# Missing proofs are tracked by routine, not by hypothetical files. The inversion blocks are
-# transcribed ahead of their proofs.
-UNPROVED_ROUTINES = {
-    "AArch64": ("divstep59Block",),
-}
+# Missing proofs are tracked by routine, not by hypothetical files; a block transcribed ahead of
+# its proof is listed here under its architecture. None at present.
+UNPROVED_ROUTINES = {}
 
 
 def architecture_routines():
