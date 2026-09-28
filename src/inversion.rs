@@ -55,7 +55,12 @@ pub(crate) trait InvertBlocks {
 /// folded into the row's masks, and reduces strictly. That sign is the top bit of the low word of
 /// `m00 · f + m01 · g`, since that sum is `2^59 · f'`.
 #[inline]
-pub(crate) fn invert<B: InvertBlocks>(x: &Limbs, modulus: &Limbs, inv: u64, v0: &Limbs) -> Limbs {
+pub(crate) fn invert_with<B: InvertBlocks>(
+    x: &Limbs,
+    modulus: &Limbs,
+    inv: u64,
+    v0: &Limbs,
+) -> Limbs {
     let mut d: u64 = 1;
     let mut f = [modulus[0], modulus[1], modulus[2], modulus[3], 0];
     let mut g = [x[0], x[1], x[2], x[3], 0];
@@ -80,11 +85,56 @@ pub(crate) fn invert<B: InvertBlocks>(x: &Limbs, modulus: &Limbs, inv: u64, v0: 
     B::cond_sub(&B::amontred(&t, modulus, inv), modulus)
 }
 
+/// The blocks that [`invert`] runs: the assembly blocks on AArch64, unless the assembly is
+/// disabled, and the portable blocks elsewhere.
+#[cfg(all(target_arch = "aarch64", not(pasta_asm_disable)))]
+type Selected = crate::aarch64::Backend;
+/// The blocks that [`invert`] runs: the assembly blocks on AArch64, unless the assembly is
+/// disabled, and the portable blocks elsewhere.
+#[cfg(not(all(target_arch = "aarch64", not(pasta_asm_disable))))]
+type Selected = crate::portable::Backend;
+
+/// Inverts a canonical Montgomery residue for a Pasta modulus, in constant time.
+///
+/// Returns the canonical `z` with `x * z ≡ 2^512 (mod p)`: for `x` the Montgomery form of a nonzero
+/// residue `X`, `z` is the Montgomery form of `X^-1`; for `x = 0` it is `0`, so a caller that needs
+/// an optional inverse checks for zero separately. The algorithm is the serial variant of
+/// Bernstein, Chen, Harrison, Huang, Maxwell, Wang, Wuille, and Yang, "Accelerating and verifying
+/// constant-time modular inversion" (EUROCRYPT 2026), as in s2n-bignum's `bignum_montinv_p256`: 590
+/// half-delta divsteps in ten rounds of 59, computed on packed words, with the coefficients reduced
+/// by one Montgomery word per round. It runs a fixed sequence of six blocks, in register-only
+/// assembly on AArch64 and in portable Rust on every other target (and on AArch64 with the assembly
+/// disabled), with no data-dependent branch or memory access in either, so its timing does not
+/// depend on `x`. The design and the correctness argument are in
+/// `design/constant-time-inversion.md` and its companion `design/constant-time-inversion-proof.md`.
+///
+/// Outputs are canonical.
+///
+/// # Safety
+///
+/// `x` must be canonical. This is debug-asserted. Under that precondition the machine-checked
+/// proofs in `lean/` establish the result on AArch64 (`invert_entry_spec`, from `montInv_spec` on
+/// words and the six block proofs), with the primality of the modulus as a hypothesis. The portable
+/// blocks are not modelled; they are tested against the same known answers as the assembly blocks.
+///
+/// `modulus` must be either the Pallas or Vesta field modulus, `inv` must be correctly derived
+/// from it, and `v0` must be `2^562 mod p`, the starting value of the coefficient `v`, which
+/// compensates the ten one-word Montgomery reductions (`2^562 = 2^(512 + 5 * 10)`). Any other
+/// values will cause undefined results.
+#[inline]
+pub fn invert(x: &Limbs, modulus: &Limbs, inv: u64, v0: &Limbs) -> Limbs {
+    debug_assert!(
+        crate::limbs::is_canonical(x, modulus),
+        "pasta_asm::invert requires a canonical input"
+    );
+    invert_with::<Selected>(x, modulus, inv, v0)
+}
+
 /// Known answers for every block and for the inversion, and the checks that run them over any
 /// backend's blocks; a backend's own test module calls the checks with its blocks.
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{InvertBlocks, invert};
+    use super::{InvertBlocks, invert_with};
     use crate::Limbs;
     use crate::test_fields::{FIELDS, Field, ZERO, p_minus_1, reference, sub_limbs};
 
@@ -244,6 +294,7 @@ pub(crate) mod tests {
 
     /// `f`, `g` (five words each), a row's magnitudes and masks, then the expected row of the
     /// update, from the round model on both fields.
+    #[rustfmt::skip]
     pub(crate) const FG_ROW_VECTORS: [[u64; 19]; 12] = [
         [0x992d30ed00000001, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000, 0x0000000000000000, 0xd83bd700ffffffe5, 0x628ddd6b04e1ba16, 0xfffffffffffffffc, 0x3fffffffffffffff, 0x0000000000000000, 0x0032000000000000, 0x004a000000000000, 0xffffffffffffffff, 0x0000000000000000, 0x66d2cf12ffffffff, 0xddb96703f6b306e4, 0xffffffffffffffff, 0x00bfffffffffffff, 0x0000000000000000],
         [0x992d30ed00000001, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000, 0x0000000000000000, 0xd83bd700ffffffe5, 0x628ddd6b04e1ba16, 0xfffffffffffffffc, 0x3fffffffffffffff, 0x0000000000000000, 0x000000000000001b, 0x0000000000000001, 0xffffffffffffffff, 0xffffffffffffffff, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0xffffffffffffff20, 0xffffffffffffffff],
@@ -262,6 +313,7 @@ pub(crate) mod tests {
     /// `u`, `v` (four words each), a row's magnitudes and masks, then the expected five-word row
     /// combination, from the round model on both fields; the last rows are the final round's, with
     /// the sign of `f` folded into the masks.
+    #[rustfmt::skip]
     pub(crate) const UV_ROW_VECTORS: [[u64; 17]; 22] = [
         [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x9a5f583ce5084635, 0x4f417e233776c195, 0x74634b1a733f7785, 0x1c51de5ea66f0f25, 0x0032000000000000, 0x004a000000000000, 0xffffffffffffffff, 0x0000000000000000, 0x4b52000000000000, 0xf53e9f8f819a3464, 0x8c88e8ee762e0853, 0x60d3a4b3b5a55058, 0x00082faa475c1c1a],
         [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x9a5f583ce5084635, 0x4f417e233776c195, 0x74634b1a733f7785, 0x1c51de5ea66f0f25, 0x000000000000001b, 0x0000000000000001, 0xffffffffffffffff, 0xffffffffffffffff, 0x65a0a7c31af7b9cb, 0xb0be81dcc8893e6a, 0x8b9cb4e58cc0887a, 0xe3ae21a15990f0da, 0xffffffffffffffff],
@@ -289,6 +341,7 @@ pub(crate) mod tests {
 
     /// A five-word row combination, the modulus, `inv`, then the expected reduction, from the round
     /// model on both fields.
+    #[rustfmt::skip]
     pub(crate) const AMONTRED_VECTORS: [[u64; 14]; 22] = [
         [0x4b52000000000000, 0xf53e9f8f819a3464, 0x8c88e8ee762e0853, 0x60d3a4b3b5a55058, 0x00082faa475c1c1a, 0x992d30ed00000001, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000, 0x992d30ecffffffff, 0xadb482ad66b03465, 0xa4b9d87ba80679cc, 0x60d3a4b3b5a55058, 0x2d33afaa475c1c1a],
         [0x65a0a7c31af7b9cb, 0xb0be81dcc8893e6a, 0x8b9cb4e58cc0887a, 0xe3ae21a15990f0da, 0xffffffffffffffff, 0x992d30ed00000001, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000, 0x992d30ecffffffff, 0x7806e5a0c4c00001, 0xadeb423bad68faee, 0x23ae21a15990f0da, 0x400eda4af942118d],
@@ -316,6 +369,7 @@ pub(crate) mod tests {
 
     /// A reduction below `2p`, the modulus, then the expected canonical value, from the final
     /// rounds of the round model on both fields.
+    #[rustfmt::skip]
     pub(crate) const COND_SUB_VECTORS: [[u64; 12]; 10] = [
         [0x8398bdd8b6db6db7, 0xbbc0f148939d4828, 0xdb6db6db6db6db6d, 0x2db6db6db6db6db6, 0x992d30ed00000001, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000, 0x8398bdd8b6db6db7, 0xbbc0f148939d4828, 0xdb6db6db6db6db6d, 0x2db6db6db6db6db6],
         [0x992d30ed00000001, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000, 0x992d30ed00000001, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
@@ -349,7 +403,10 @@ pub(crate) mod tests {
         for row in FG_ROW_VECTORS {
             let f: [u64; 5] = row[0..5].try_into().expect("five words");
             let g: [u64; 5] = row[5..10].try_into().expect("five words");
-            assert_eq!(B::fg_row(&f, &g, row[10], row[11], row[12], row[13]), row[14..19]);
+            assert_eq!(
+                B::fg_row(&f, &g, row[10], row[11], row[12], row[13]),
+                row[14..19]
+            );
         }
     }
 
@@ -358,7 +415,10 @@ pub(crate) mod tests {
         for row in UV_ROW_VECTORS {
             let u: Limbs = row[0..4].try_into().expect("four words");
             let v: Limbs = row[4..8].try_into().expect("four words");
-            assert_eq!(B::uv_row(&u, &v, row[8], row[9], row[10], row[11]), row[12..17]);
+            assert_eq!(
+                B::uv_row(&u, &v, row[8], row[9], row[10], row[11]),
+                row[12..17]
+            );
         }
     }
 
@@ -384,10 +444,10 @@ pub(crate) mod tests {
     /// Montgomery product `x · z` is `R`, inverting `z` gives `x` back, and `z` is the inverse
     /// that the independent Fermat computation gives.
     fn check_inverse<B: InvertBlocks>(f: &Field, x: &Limbs) {
-        let z = invert::<B>(x, &f.modulus, f.inv, &f.v0);
-        assert!(crate::is_canonical(&z, &f.modulus), "{x:x?}");
+        let z = invert_with::<B>(x, &f.modulus, f.inv, &f.v0);
+        assert!(crate::limbs::is_canonical(&z, &f.modulus), "{x:x?}");
         assert_eq!(reference::mont_mul(x, &z, &f.modulus, f.inv), f.r, "{x:x?}");
-        assert_eq!(invert::<B>(&z, &f.modulus, f.inv, &f.v0), *x, "{x:x?}");
+        assert_eq!(invert_with::<B>(&z, &f.modulus, f.inv, &f.v0), *x, "{x:x?}");
         assert_eq!(
             z,
             reference::montgomery_inverse(x, &f.modulus, f.inv, &f.r, &f.pm2),
@@ -400,7 +460,7 @@ pub(crate) mod tests {
     pub(crate) fn invert_known_answers<B: InvertBlocks>() {
         for f in FIELDS {
             for (x, z) in &f.inversions {
-                assert_eq!(invert::<B>(x, &f.modulus, f.inv, &f.v0), *z);
+                assert_eq!(invert_with::<B>(x, &f.modulus, f.inv, &f.v0), *z);
                 if *x != ZERO {
                     check_inverse::<B>(f, x);
                 }
@@ -453,54 +513,25 @@ pub(crate) mod tests {
         }
     }
 
-    /// The checks over the AArch64 blocks.
-    #[cfg(target_arch = "aarch64")]
-    mod aarch64 {
-        use crate::aarch64::Backend;
-
-        #[test]
-        fn sign_mag_known_answers() {
-            super::sign_mag_known_answers::<Backend>();
-        }
-
-        #[test]
-        fn divstep59_known_answers() {
-            super::divstep59_known_answers::<Backend>();
-        }
-
-        #[test]
-        fn fg_row_known_answers() {
-            super::fg_row_known_answers::<Backend>();
-        }
-
-        #[test]
-        fn uv_row_known_answers() {
-            super::uv_row_known_answers::<Backend>();
-        }
-
-        #[test]
-        fn amontred_known_answers() {
-            super::amontred_known_answers::<Backend>();
-        }
-
-        #[test]
-        fn cond_sub_known_answers() {
-            super::cond_sub_known_answers::<Backend>();
-        }
-
-        #[test]
-        fn invert_known_answers() {
-            super::invert_known_answers::<Backend>();
-        }
-
-        #[test]
-        fn invert_small_and_near_modulus() {
-            super::invert_small_and_near_modulus::<Backend>();
-        }
-
-        #[test]
-        fn invert_random() {
-            super::invert_random::<Backend>();
+    /// The entry point `invert` runs the selected blocks, and in a debug build its assertion
+    /// fires on a non-canonical input.
+    #[test]
+    fn invert_entry_point() {
+        for f in FIELDS {
+            for (x, z) in &f.inversions {
+                assert_eq!(super::invert(x, &f.modulus, f.inv, &f.v0), *z);
+            }
+            #[cfg(all(debug_assertions, panic = "unwind"))]
+            {
+                let panic = std::panic::catch_unwind(|| {
+                    super::invert(&f.modulus, &f.modulus, f.inv, &f.v0)
+                })
+                .expect_err("the debug assertion of invert's contract did not fire");
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .expect("the assertion's message is a string literal");
+                assert!(message.contains("requires a canonical input"), "{message}");
+            }
         }
     }
 }

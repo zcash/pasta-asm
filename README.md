@@ -3,8 +3,8 @@
 Assembly backends for the Pasta (Pallas and Vesta) field arithmetic of the
 [`pasta_curves`](https://github.com/zcash/pasta_curves) crate. The crate provides AArch64 and
 x86-64 backends for modular addition and subtraction, Montgomery multiplication and squaring, a
-repeated-squaring chain, and conversion out of Montgomery form, and an AArch64 backend for
-constant-time inversion.
+repeated-squaring chain, and conversion out of Montgomery form, and a constant-time inversion
+on every target, from AArch64 assembly blocks or the same blocks in portable Rust.
 
 ## Provenance
 
@@ -43,14 +43,17 @@ Apple x86-64 targets are excluded altogether: they reserve `rbp`, and so have fe
 registers than the squaring blocks need.
 
 On every other target, that is any target other than AArch64 and non-Apple x86-64 with 64-bit
-pointers, the crate is empty. It is also empty, on any target, when the compiler is passed
-`--cfg pasta_asm_disable` (through `RUSTFLAGS`, or `rustflags` in `.cargo/config.toml`), which
-is how to build for old x86-64 CPUs without BMI2 and ADX. A consumer does not repeat these
-conditions: it declares its uses of the crate under `pasta_asm::if_supported!` and its portable
-fallback under `pasta_asm::if_unsupported!`; the first expands to its items exactly where the
-crate has a backend, and the second exactly where it does not. `pasta_asm::BACKEND` names the
-result. Two things follow for a direct consumer. The expansion is checked in the consumer's
-crate, so the consumer declares the cfg as expected, in its `Cargo.toml`:
+pointers, the crate has no Montgomery backend. Nor has it one, on any target, when the compiler
+is passed `--cfg pasta_asm_disable` (through `RUSTFLAGS`, or `rustflags` in
+`.cargo/config.toml`), which is how to build for old x86-64 CPUs without BMI2 and ADX. A
+consumer does not repeat these conditions: it declares its uses of the crate under
+`pasta_asm::if_supported!` and its portable fallback under `pasta_asm::if_unsupported!`; the
+first expands to its items exactly where the crate has a backend, and the second exactly where
+it does not. `pasta_asm::BACKEND` names the result. The constant-time inversion, `invert`, is
+provided on every target and under `pasta_asm_disable` too: by assembly blocks on AArch64 with
+the assembly enabled, and by the same blocks in portable Rust (`src/portable.rs`) otherwise.
+Two things follow for a direct consumer. The expansion is checked in the consumer's crate, so
+the consumer declares the cfg as expected, in its `Cargo.toml`:
 
 ```toml
 [lints.rust]
@@ -92,10 +95,13 @@ The squaring blocks and the conversion out of Montgomery form make the same canc
 Where the crate has a backend, `cargo test --release` runs known-answer tests of the entry
 points for both fields and replays the reference vectors recorded from the AArch64 assembly;
 in a debug build it also checks that the operand assertions fire outside the contracts. The
-inversion's blocks are also tested one by one against an integer model of the algorithm.
-Elsewhere, and with `--cfg pasta_asm_disable`, only the crate documentation's example runs,
-on its portable arm. `pasta_curves` tests the backend against its portable arithmetic when its
-`aarch64-asm` feature is enabled. `scripts/ci.sh` runs every check CI runs.
+inversion's blocks are tested one by one against an integer model of the algorithm, and the
+inversion against known answers, the identity `x · x^-1 = 1`, and a Fermat inverse computed
+with a reference multiplication, over the assembly blocks on AArch64 and over the portable
+blocks everywhere. Elsewhere, and with `--cfg pasta_asm_disable`, those tests over the portable
+blocks are the ones that run, and the crate documentation's example runs on its portable arm.
+`pasta_curves` tests the backend against its portable arithmetic when its `aarch64-asm` feature
+is enabled. `scripts/ci.sh` runs every check CI runs.
 
 ## Formal verification
 
@@ -103,11 +109,14 @@ on its portable arm. `pasta_curves` tests the backend against its portable arith
 assuring their correctness. The model is at the instruction level. Individual blocks of
 assembly are proven; from those, each of the six Montgomery entry points is proved at either
 Pasta field, under the condition that the entry point asserts. The inversion's algorithm is
-proved on words (`montInv_spec`), each of its six blocks is proved to compute its word-level
-function, and `invert` is proved at either field from their composition (`invert_entry_spec`),
-with the primality of the modulus as a hypothesis. The transcription is generated from the
-crate's own inline blocks, CI regenerates and diffs it, and the independent `nanoda`
-implementation of the Lean kernel re-checks the build. See [`lean/README.md`](lean/README.md).
+proved on words (`montInv_spec`), each of its six AArch64 blocks is proved to compute its
+word-level function, and `invert` is proved at either field from their composition
+(`invert_entry_spec`), with the primality of the modulus as a hypothesis. The portable blocks
+are not modelled; they are checked against the same known answers as the assembly blocks, and a
+translation to Lean by Aeneas is the intended way to bring them under the same proof. The
+transcription is generated from the crate's own inline blocks, CI regenerates and diffs it, and
+the independent `nanoda` implementation of the Lean kernel re-checks the build. See
+[`lean/README.md`](lean/README.md).
 
 ## License
 

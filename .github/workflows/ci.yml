@@ -51,19 +51,24 @@ jobs:
             echo "$out"
             echo "$out" | grep -q "^test result: ok. $expected passed"
           done
-      - name: Build and test with the assembly disabled, with nothing to run
+      - name: Build and test with the assembly disabled
         shell: bash
         env:
           RUSTFLAGS: --cfg pasta_asm_disable
           RUSTDOCFLAGS: --cfg pasta_asm_disable
-        # The unit tests compile out with the assembly; the crate documentation's
-        # example takes its portable arm and still passes.
+        # The backends' unit tests compile out with the assembly, and the inversion's
+        # tests run over the portable blocks: exactly the tests of the modules that
+        # every target compiles. The crate documentation's example takes its portable
+        # arm and still passes.
         run: |
           cargo build --verbose
+          expected=$(grep -rh '^\s*#\[test\]' src/inversion.rs src/limbs.rs src/portable.rs | wc -l | tr -d ' ')
+          echo "tests in the portable modules: $expected"
+          test "$expected" -gt 0
           for profile in "" --release; do
             out=$(cargo test --lib $profile 2>&1)
             echo "$out"
-            echo "$out" | grep -q '^test result: ok. 0 passed'
+            echo "$out" | grep -q "^test result: ok. $expected passed"
           done
           cargo test --doc
       - name: Verify working directory is clean
@@ -87,9 +92,10 @@ jobs:
             -Z build-std=core,compiler_builtins --target aarch64-apple-darwin
 
   other-targets:
-    name: Empty crate elsewhere
-    # The crate must build, and test with nothing to run, wherever a consumer
-    # enables the optional dependency.
+    name: Portable inversion elsewhere
+    # The crate must build and test wherever a consumer enables the optional
+    # dependency: the portable inversion everywhere, the Montgomery routines
+    # where there is a backend.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -112,10 +118,10 @@ jobs:
           test "$(printf '%s\n' "$deps" | grep -c .)" -eq 1
 
   intel-macos:
-    name: Empty crate on Intel macOS
+    name: Portable inversion on Intel macOS
     # Apple x86-64 targets reserve `rbp`, and so have fewer available registers
-    # than the squaring blocks need; the crate compiles out there instead of
-    # failing to build.
+    # than the squaring blocks need; the Montgomery backend compiles out there
+    # instead of failing to build, and the portable inversion remains.
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -125,14 +131,17 @@ jobs:
         run: test "$(uname -sm)" = "Darwin x86_64"
       - name: Build
         run: cargo build --verbose
-      - name: Test (debug and release), with no unit test to run
+      - name: Test (debug and release), the portable modules' tests only
         shell: bash
         # The crate documentation's example takes its portable arm and still passes.
         run: |
+          expected=$(grep -rh '^\s*#\[test\]' src/inversion.rs src/limbs.rs src/portable.rs | wc -l | tr -d ' ')
+          echo "tests in the portable modules: $expected"
+          test "$expected" -gt 0
           for profile in "" --release; do
             out=$(cargo test --lib $profile 2>&1)
             echo "$out"
-            echo "$out" | grep -q '^test result: ok. 0 passed'
+            echo "$out" | grep -q "^test result: ok. $expected passed"
           done
           cargo test --doc
 

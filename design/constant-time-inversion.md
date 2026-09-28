@@ -71,14 +71,15 @@ model.
   s2n-bignum's ARM and x86 `bignum_montinv_p256` with the Pasta constants and the Pasta
   `amontred` (the modulus shape `modulus[2] = 0`, `modulus[3] = 2^62` replaces P-256's), under
   the crate's Apache-2.0.
-- **Portable Rust: pasta_curves** (@daira's decision, 2026-09-27), adapted from s2n-bignum
-  under MIT-0 or ISC, used on the `if_unsupported!` arm and replacing the variable-time
-  `modinv62` on secret paths; pasta-asm stays optional. (Placing it in pasta-asm instead would
-  no longer raise a licence problem: Semolina was relicensed as MIT OR Apache-2.0 on
-  2026-09-23, supranational/semolina commit `937ec97c417a`, so pasta-asm can be relicensed
-  likewise, which has not been done yet. It was decided on other grounds.) The Rust is written
-  function for function against the Lean word-level definitions and checked against the shared
-  vectors; an Aeneas translation to Lean is the stretch goal that would make the link a proof.
+- **Portable Rust: pasta-asm, `src/portable.rs`** (@daira's decision, 2026-09-28, revising the
+  placement in pasta_curves of 2026-09-27: the formalization is shared, so the same block
+  decomposition and driver serve it). The six blocks are written against the block contracts
+  as the Lean specifications state them, in the shape of the word-level model (the packed
+  recurrence with masks, the decoder's formula, limb arithmetic modulo `2^320`), and `invert`
+  runs them on every target that has no assembly blocks, and under `pasta_asm_disable`. They
+  are checked against the same known answers as the assembly blocks; an Aeneas translation to
+  Lean is the intended way to make the link a proof, by instantiating `InvertBlocks` with the
+  translated functions.
 - **Vectors:** one file, inputs chosen to exercise the edge cases (0, 1, p−1, powers of two,
   the 590-step extremal inputs from the paper's method if reproducible, random), expected
   values computed independently; replayed by every backend's tests and by Lean.
@@ -152,7 +153,8 @@ Portable Rust:
   `pow`.
 - **M2** Lean shared layer: definitions of the word-level functions, obligations 1–4 proved, 5
   as a hypothesis; `#eval` of `montInvModel` agrees with the Python model on the vectors.
-- **M3** portable Rust against the Lean definitions; vectors; benchmark.
+- **M3** portable Rust against the block contracts, in pasta-asm, provided on every target;
+  the known answers and the inversion checks over it; benchmark.
 - **M4** AArch64 blocks; generator extensions; obligation 6 for AArch64; `invert_entry_spec`.
 - **M5** x86-64 blocks; the same. The AArch64 block proofs separate the instruction plumbing (flags,
   the conditional instructions, the generated skeletons) from word lemmas that do not depend on the

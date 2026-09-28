@@ -8,8 +8,6 @@
 
 use super::{Limbs, add, from_mont, sub};
 
-#[cfg(target_arch = "aarch64")]
-use super::invert;
 use super::{mul, sqr_n_mul, square};
 use crate::test_fields::{FIELDS, FP, FQ, Field, ONE, ZERO, p_minus_1};
 
@@ -17,22 +15,6 @@ use crate::test_fields::{FIELDS, FP, FQ, Field, ONE, ZERO, p_minus_1};
 fn backend_name() {
     let expected = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86-64" };
     assert_eq!(super::BACKEND, expected);
-}
-
-/// The borrow chain of `is_canonical` decides `value < modulus` at the limb boundaries.
-#[test]
-fn is_canonical_borrow_chain() {
-    let m = [5, 0, 0, 7];
-    assert!(super::is_canonical(&[4, 0, 0, 7], &m));
-    assert!(!super::is_canonical(&m, &m));
-    assert!(!super::is_canonical(&[6, 0, 0, 7], &m));
-    // A borrow out of the low limbs is absorbed by a larger top limb, and forced by a smaller one.
-    assert!(super::is_canonical(&[u64::MAX, u64::MAX, u64::MAX, 6], &m));
-    assert!(!super::is_canonical(&[0, 0, 0, 8], &m));
-    // A middle limb decides when the top limbs agree.
-    assert!(!super::is_canonical(&[0, 1, 0, 7], &m));
-    assert!(super::is_canonical(&[u64::MAX, 0, 0, 6], &m));
-    assert!(super::is_canonical(&[0, 0, 0, 0], &m));
 }
 
 #[test]
@@ -127,27 +109,6 @@ fn from_mont_known_answers() {
     );
 }
 
-/// The entry point `invert` runs the backend's blocks, and in a debug build its assertion fires
-/// on a non-canonical input. The blocks and the driver are tested in `crate::inversion`.
-#[cfg(target_arch = "aarch64")]
-#[test]
-fn invert_entry_point() {
-    for f in FIELDS {
-        for (x, z) in &f.inversions {
-            assert_eq!(invert(x, &f.modulus, f.inv, &f.v0), *z);
-        }
-        #[cfg(all(debug_assertions, panic = "unwind"))]
-        {
-            let panic = std::panic::catch_unwind(|| invert(&f.modulus, &f.modulus, f.inv, &f.v0))
-                .expect_err("the debug assertion of invert's contract did not fire");
-            let message = panic
-                .downcast_ref::<&str>()
-                .expect("the assertion's message is a string literal");
-            assert!(message.contains("requires a canonical input"), "{message}");
-        }
-    }
-}
-
 /// The reference vectors: outputs of Semolina's `mul_mont_pasta`, `sqr_mont_pasta`, and
 /// `from_mont_pasta` as vendored by pasta_curves at `8ad85e9fab7929f6236960e472f432a4bd9ccd74`,
 /// recorded on an Apple M-series machine by the test in `test-vectors/dump-asm-vectors.patch`
@@ -191,14 +152,14 @@ fn in_contract(op: &str, f: &Field, first: &Limbs, second: Option<&Limbs>) -> bo
     match op {
         "MUL" => {
             let rhs = second.unwrap();
-            super::is_canonical(first, &f.modulus)
-                || (super::is_canonical(rhs, &f.modulus)
+            crate::limbs::is_canonical(first, &f.modulus)
+                || (crate::limbs::is_canonical(rhs, &f.modulus)
                     && rhs[1..].iter().all(|&limb| limb <= u64::MAX - 2))
         }
-        "SQR" => super::is_canonical(first, &f.modulus),
+        "SQR" => crate::limbs::is_canonical(first, &f.modulus),
         "ADD" | "SUB" => {
-            super::is_canonical(first, &f.modulus)
-                && super::is_canonical(second.unwrap(), &f.modulus)
+            crate::limbs::is_canonical(first, &f.modulus)
+                && crate::limbs::is_canonical(second.unwrap(), &f.modulus)
         }
         "FROM" => true,
         _ => panic!("unknown routine {op}"),
