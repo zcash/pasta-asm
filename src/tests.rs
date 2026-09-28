@@ -8,6 +8,8 @@
 
 use super::{Limbs, add, from_mont, sub};
 
+#[cfg(target_arch = "aarch64")]
+use super::invert;
 use super::{mul, sqr_n_mul, square};
 
 #[test]
@@ -55,6 +57,11 @@ struct Field {
     pm1_sq: Limbs,
     /// `p - 2`.
     pm2: Limbs,
+    /// `2^562 mod p`, the starting `v` of `invert`.
+    v0: Limbs,
+    /// Inputs and outputs of `invert`: `7R`, `0`, `1`, `p - 1`, and a small value, from the
+    /// integer model of the algorithm.
+    inversions: [(Limbs, Limbs); 5],
 }
 
 /// The Pallas base field (`pasta_curves::Fp`).
@@ -120,6 +127,34 @@ const FP: Field = Field {
         0x0000000000000000,
         0x4000000000000000,
     ],
+    v0: [
+        0x9a5f583ce5084635,
+        0x4f417e233776c195,
+        0x74634b1a733f7785,
+        0x1c51de5ea66f0f25,
+    ],
+    inversions: [
+        (
+            [0xd83bd700ffffffe5, 0x628ddd6b04e1ba16, 0xfffffffffffffffc, 0x3fffffffffffffff],
+            [0x8398bdd8b6db6db7, 0xbbc0f148939d4828, 0xdb6db6db6db6db6d, 0x2db6db6db6db6db6],
+        ),
+        (
+            [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+            [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+        ),
+        (
+            [0x0000000000000001, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+            [0x8c78ecb30000000f, 0xd7d30dbd8b0de0e7, 0x7797a99bc3c95d18, 0x096d41af7b9cb714],
+        ),
+        (
+            [0x992d30ed00000000, 0x224698fc094cf91b, 0x0000000000000000, 0x4000000000000000],
+            [0x0cb44439fffffff2, 0x4a738b3e7e3f1834, 0x886856643c36a2e7, 0x3692be50846348eb],
+        ),
+        (
+            [0xfc962fc962fc9630, 0x369d0369d0369cd2, 0x0000000000000000, 0x0000000000000000],
+            [0x33912c173eb52b5e, 0x8094d7a33b979988, 0x4c1c894cf5cc5f05, 0x2d05c75a616fc8d4],
+        ),
+    ],
 };
 
 /// The Vesta base field (`pasta_curves::Fq`).
@@ -184,6 +219,34 @@ const FQ: Field = Field {
         0x224698fc0994a8dd,
         0x0000000000000000,
         0x4000000000000000,
+    ],
+    v0: [
+        0xa3efbd8ee5083303,
+        0xfbadea62cefef7a1,
+        0xd6418abb493f6cf9,
+        0x2aa5feb88c401333,
+    ],
+    inversions: [
+        (
+            [0x34853384ffffffe5, 0x628ddd6afd5230a2, 0xfffffffffffffffc, 0x3fffffffffffffff],
+            [0x81c0fd04b6db6db7, 0xbbc0f14893a785d6, 0xdb6db6db6db6db6d, 0x2db6db6db6db6db6],
+        ),
+        (
+            [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+            [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+        ),
+        (
+            [0x0000000000000001, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+            [0xfc9678ff0000000f, 0x67bb433d891a16e3, 0x7fae231004ccf590, 0x096d41af7ccfdaa9],
+        ),
+        (
+            [0x8c46eb2100000000, 0x224698fc0994a8dd, 0x0000000000000000, 0x4000000000000000],
+            [0x8fb07221fffffff2, 0xba8b55be807a91f9, 0x8051dceffb330a6f, 0x3692be5083302556],
+        ),
+        (
+            [0xfc962fc962fc9630, 0x369d0369d0369cd2, 0x0000000000000000, 0x0000000000000000],
+            [0xe5c6fb7bddd0cf4b, 0x65ee805e3b7d0d89, 0x7562671be840d861, 0x1253ce66fd1d1868],
+        ),
     ],
 };
 
@@ -289,6 +352,89 @@ fn from_mont_known_answers() {
             0x20857622e89b86ac,
         ]
     );
+}
+
+/// `z = invert(x)` is canonical and is the Montgomery inverse of a nonzero `x`:
+/// `mul(x, z) = R`, and inverting `z` gives `x` back.
+#[cfg(target_arch = "aarch64")]
+fn check_inverse(f: &Field, x: &Limbs) {
+    let z = invert(x, &f.modulus, f.inv, &f.v0);
+    assert!(super::is_canonical(&z, &f.modulus), "{x:x?}");
+    assert_eq!(mul(x, &z, &f.modulus, f.inv), f.r, "{x:x?}");
+    assert_eq!(invert(&z, &f.modulus, f.inv, &f.v0), *x, "{x:x?}");
+}
+
+/// `invert` reproduces the integer model of the algorithm on the recorded inputs, which include
+/// `0`. In a debug build the test also checks that the assertion fires on a non-canonical input.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn invert_known_answers() {
+    for f in FIELDS {
+        for (x, z) in &f.inversions {
+            assert_eq!(invert(x, &f.modulus, f.inv, &f.v0), *z);
+            if *x != ZERO {
+                check_inverse(f, x);
+            }
+        }
+        #[cfg(all(debug_assertions, panic = "unwind"))]
+        {
+            let panic = std::panic::catch_unwind(|| invert(&f.modulus, &f.modulus, f.inv, &f.v0))
+                .expect_err("the debug assertion of invert's contract did not fire");
+            let message = panic
+                .downcast_ref::<&str>()
+                .expect("the assertion's message is a string literal");
+            assert!(message.contains("requires a canonical input"), "{message}");
+        }
+    }
+}
+
+/// The small values `1` to `256` and their negatives `p - 1` down to `p - 256`, the powers of
+/// two up to `2^253`, and `R`, `R^2`, and `R^3`.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn invert_small_and_near_modulus() {
+    for f in FIELDS {
+        for k in 1..=256u64 {
+            check_inverse(f, &[k, 0, 0, 0]);
+            check_inverse(f, &sub(&ZERO, &[k, 0, 0, 0], &f.modulus));
+        }
+        for k in 0..254 {
+            let mut x = ZERO;
+            x[k / 64] = 1 << (k % 64);
+            check_inverse(f, &x);
+        }
+        for x in [f.r, f.r2, f.r3] {
+            check_inverse(f, &x);
+        }
+    }
+}
+
+/// Random inputs: uniform values below `2^64`; uniform values below `2^254`; values between
+/// `2^254` and `p`, whose top limb is `2^62` and whose limb 1 is below the modulus's; and values
+/// within a random 64-bit distance below `p - 1`.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn invert_random() {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for f in FIELDS {
+        let pm1 = p_minus_1(f);
+        for _ in 0..128 {
+            let below_2_64 = [next(), 0, 0, 0];
+            check_inverse(f, &below_2_64);
+            let below_2_254 = [next(), next(), next(), next() >> 2];
+            check_inverse(f, &below_2_254);
+            let above_2_254 = [next(), next() % f.modulus[1], 0, 1 << 62];
+            check_inverse(f, &above_2_254);
+            let near_p = sub(&pm1, &[next(), 0, 0, 0], &f.modulus);
+            check_inverse(f, &near_p);
+        }
+    }
 }
 
 /// The reference vectors: outputs of Semolina's `mul_mont_pasta`, `sqr_mont_pasta`, and
