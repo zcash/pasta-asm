@@ -176,9 +176,6 @@ comes the Nix route is the one to try first.
   proves both Pasta primes prime by Pratt certificates, but pasta-asm does not depend on
   CompPoly, so the theorem takes primality as a hypothesis until a certificate is vendored or
   the fact is taken from the consumer.
-- `divstep59` in s2n-bignum is a 605-instruction macro. The transcription is straight-line and
-  the proof is per step, but the generator will need the new instruction semantics before
-  anything else.
 - Register pressure on x86-64 without `rbp` is not an issue here (the blocks are small), but
   the Apple x86-64 exclusion stays for the multiplication blocks anyway.
 - Whether the last round can skip the `v` computation and the `f,g` update as s2n-bignum does

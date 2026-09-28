@@ -5,6 +5,7 @@ Released under the Apache License, Version 2.0, as described in the file LICENSE
 import PastaAsm.Fields
 import PastaAsm.Spec
 import PastaAsm.AArch64.Spec
+import PastaAsm.Inversion.HullCert
 
 /-!
 # The crate's entry points at its fields
@@ -97,17 +98,19 @@ theorem sub_entry_spec (F : PastaField) (lhs rhs : Limbs) (hlhs : lhs.Bounded)
 
 /-- The crate's `invert` at a Pasta field. The input is canonical, as the entry point asserts,
 and `v0` is `2^562 mod p`, as its contract requires. The result is canonical. For `x = 0` it is
-`0`; otherwise it is the Montgomery inverse, with `x * result ≡ R^2 (mod p)`. The termination
-bound of the divstep recurrence and the primality of `p` are hypotheses, as in `montInv_spec`. -/
-theorem invert_entry_spec (F : PastaField) (hbound : Inversion.TerminationBound 256)
-    (hprime : Nat.Prime F.modulus.toNat) (x : Limbs) (hx : x.Bounded)
-    (h : isCanonical x F.modulus = true) (v0 : Limbs) (hv0 : v0 = Inversion.startV F) :
+`0`; otherwise it is the Montgomery inverse, with `x * result ≡ R^2 (mod p)`. The primality of
+`p` is a hypothesis, as in `montInv_spec`. The termination bound of the divstep recurrence is
+discharged by the hull certificate's `terminationBound_256`. -/
+theorem invert_entry_spec (F : PastaField) (hprime : Nat.Prime F.modulus.toNat) (x : Limbs)
+    (hx : x.Bounded) (h : isCanonical x F.modulus = true) (v0 : Limbs)
+    (hv0 : v0 = Inversion.startV F) :
     (invert x F.modulus F.inv v0).Bounded ∧
       (invert x F.modulus F.inv v0).toNat < F.modulus.toNat ∧
       (x.toNat = 0 → invert x F.modulus F.inv v0 = Limbs.ofNat 0) ∧
       (x.toNat ≠ 0 →
         x.toNat * (invert x F.modulus F.inv v0).toNat ≡ R^2 [MOD F.modulus.toNat]) := by
   rw [hv0, invert_eq_model F x hx]
-  exact Inversion.montInv_spec F hbound hprime x hx ((isCanonical_iff x F.modulus hx F.bounded).1 h)
+  exact Inversion.montInv_spec F Inversion.Hull.terminationBound_256 hprime x hx
+    ((isCanonical_iff x F.modulus hx F.bounded).1 h)
 
 end PastaAsm.AArch64
