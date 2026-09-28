@@ -17,6 +17,7 @@ import PastaAsm.Inversion.HullBound
 import PastaAsm.Inversion.HullData
 import PastaAsm.Inversion.HullCert
 import PastaAsm.Inversion.SignMag
+import PastaAsm.Inversion.PackedWords
 import PastaAsm.Inversion.Composition
 import PastaAsm.AArch64
 import PastaAsm.X86_64

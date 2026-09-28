@@ -156,10 +156,10 @@ Portable Rust:
 - **M4** AArch64 blocks; generator extensions; obligation 6 for AArch64; `invert_entry_spec`.
 - **M5** x86-64 blocks; the same. The AArch64 block proofs separate the instruction plumbing (flags,
   the conditional instructions, the generated skeletons) from word lemmas that do not depend on the
-  ISA: the two's-complement row identities, the shift by 59, the three-case analysis of a packed
-  step, the decoder arithmetic, and the batch iteration. When the x86-64 proofs start, those lemmas
-  move to a shared module, stated over the shared semantics where possible, so that the x86-64 files
-  carry only the plumbing.
+  ISA: the two's-complement row identities, the shift by 59, the three cases of a packed step, the
+  decoder arithmetic, and the batch iteration. Those lemmas are in the shared layer
+  (`Inversion/SignMag.lean`, `Inversion/PackedWords.lean`), stated over the shared word
+  operations, so that the x86-64 files carry only the plumbing.
 - **M6** replace #10's inversion (str4d's call); docs, CI, README's coverage statements; PR.
 - **M7** the termination bound by hull certificate (obligation 5), and the CI step that runs
   the exact re-check of its data: independent of M3–M5, can run in parallel; the PR is not

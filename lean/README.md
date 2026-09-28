@@ -110,7 +110,8 @@ PastaAsm/Inversion/Hull.lean          convex regions by half-planes, inclusions 
 PastaAsm/Inversion/HullBound.lean     the termination bound from a certificate (the hull-light argument)
 PastaAsm/Inversion/HullData.lean      GENERATED: the certificate's half-planes and Farkas records
 PastaAsm/Inversion/HullCert.lean      the certificate checked by the kernel; `terminationBound_256`
-PastaAsm/Inversion/SignMag.lean       the sign-magnitude form of a matrix entry, as the row blocks take it
+PastaAsm/Inversion/SignMag.lean       the sign-magnitude form of a matrix entry; the row identities on words
+PastaAsm/Inversion/PackedWords.lean   the packed step, packing, and decoder on words, for any instruction set
 PastaAsm/Inversion/Composition.lean   `InvertBlocks.Spec`, and `invert` equals the model over blocks that meet it
 PastaAsm/AArch64.lean                 AArch64 umbrella module
 PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
