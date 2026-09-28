@@ -96,6 +96,16 @@ PastaAsm/Spec.lean                    shared arithmetic and limb lemmas
 PastaAsm/Vectors.lean                 GENERATED: the reference vectors inside the contracts
 ../test-vectors/pasta_mul-armv8-vectors.txt   the hardware outputs the vectors are generated from
 PastaAsm/VectorCheck.lean             a backend's routines, and the vectors it fails
+PastaAsm/Inversion/Divstep.lean       half-delta divsteps on integers: the step matrix and its bounds
+PastaAsm/Inversion/Packed.lean        divsteps on packed words: the batch equals the true matrix
+PastaAsm/Inversion/Divstep59.lean     the 59-step block on low words: three batches and their product
+PastaAsm/Inversion/Round.lean         the round arithmetic: five-word `updateFG`, `amontred`, `updateUV`, `finalU`
+PastaAsm/Inversion/Termination.lean   the termination bound (Theorem 5) as a proposition
+PastaAsm/Inversion/Model.lean         the rounds, `montInvModel`, the round invariant (Lemma 11), and Theorem 12
+PastaAsm/Inversion/Hull.lean          convex regions by half-planes, inclusions by Farkas certificates
+PastaAsm/Inversion/HullBound.lean     the termination bound from a certificate (the hull-light argument)
+PastaAsm/Inversion/HullData.lean      GENERATED: the certificate's half-planes and Farkas records
+PastaAsm/Inversion/HullCert.lean      the certificate checked by the kernel; `terminationBound_256`
 PastaAsm/AArch64.lean                 AArch64 umbrella module
 PastaAsm/AArch64/Semantics.lean       AArch64 instruction semantics
 PastaAsm/AArch64/Transcription.lean   GENERATED: the blocks and the round
