@@ -173,12 +173,14 @@ goes to merge carries none, and CI's axiom census remains the check.
 
 ## Aeneas
 
-A local clone exists (2026-09-25, AeneasVerif/aeneas `b86120db`), unbuilt: no `bin/`, and it
-needs OCaml (opam) plus Charon at the pinned revision (`charon-pin`), or the repository's Nix
-flake. Its Lean backend pins `leanprover/lean4:v4.31.0` with Mathlib at that tag; pasta-asm
-pins `v4.30.0` with Mathlib `c5ea0035`. So the translated Rust can join our Lean project once
-pasta-asm moves to 4.31, a routine monthly bump. Nothing to install until M3; when the time
-comes the Nix route is the one to try first.
+AeneasVerif/aeneas at `b86120db`, with Charon at its pinned revision, builds through the
+repository's Nix flake (`nix build .#charon .#aeneas`; the release bundle's code-signing step
+fails on macOS). Its Lean backend pins `leanprover/lean4:v4.31.0` with Mathlib at that tag,
+which pasta-asm pins too. `charon cargo --preset=aeneas` on the crate built with
+`--cfg pasta_asm_disable`, then `aeneas -backend lean`, translates the portable blocks and the
+driver: the trait `InvertBlocks` becomes a record of the six blocks, the driver a function over
+it, the blocks straight-line code in Aeneas's `Result` monad, and the fixed loops `loop`
+combinators over ranges. Two library functions, `black_box` and `wrapping_neg`, need models.
 
 ## Open issues
 
