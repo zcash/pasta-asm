@@ -10,6 +10,7 @@ import PastaAsm.AArch64.Spec.Square
 import PastaAsm.AArch64.Spec.CondSub
 import PastaAsm.AArch64.Spec.Amontred
 import PastaAsm.AArch64.Spec.SignMag
+import PastaAsm.AArch64.Spec.UvRow
 
 /-!
 # Correctness of the transcribed Pasta Montgomery blocks
