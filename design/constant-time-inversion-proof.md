@@ -94,6 +94,20 @@ Magnitudes: `|φ|, |γ| ≤ 2^20 − 1` by Lemma 3's `max` bound applied to the 
 `2^{41−j} |u_j| ≤ 2^41` and `2^{62−j} |v_j| ≤ 2^62` by Lemma 3, so
 `|w| < 2^20 + 2^41 + 2^62 < 2^63`. ∎
 
+**Lemma 6′ (the sum does not wrap).** For `j < k`, `|w_g^{(j+1)}| < 2^62`. So the word
+`w_g^{(j)} ∓ w_f^{(j)}` (or `w_g^{(j)}` alone) that a step halves, which is `2 w_g^{(j+1)}`, is
+below `2^63` in magnitude and fits a signed 64-bit word. An implementation on machine words needs
+this, and Lemma 6's bound `|w| < 2^63` does not give it. *Proof.* By Lemma 1 applied to the packed
+start, `2^{j+1} w_g^{(j+1)} = q' w_f^{(0)} + r' w_g^{(0)}`, where `(q', r')` is the second row of
+the packed run's matrix after `j + 1` steps, which is `M_{j+1}` by Lemma 6; so
+`|q'| + |r'| ≤ 2^{j+1}` and `r' ∈ (−2^{j+1}, 2^{j+1}]` by Lemma 3, while `|w_f^{(0)}| ≤ 2^41` and
+`|w_g^{(0)}| ≤ 2^62`. Hence `|2^{j+1} w_g^{(j+1)}| ≤ 2^41 |q'| + 2^62 |r'|`, which is below
+`2^62 · 2^{j+1}` unless `q' = 0` and `r' = 2^{j+1}`. That row is the second row of `T_j M_j`, so
+`r'` is `r_j − v_j`, `r_j`, or `r_j + v_j`; it equals `2^{j+1}` only in the last case, with
+`r_j = v_j = 2^j`, and then `q' = q_j + u_j` while `det M_j = u_j r_j − v_j q_j = 2^j (u_j − q_j)`
+equals `2^j`, so `u_j − q_j = 1` and `q' = 2 q_j + 1 ≠ 0`. In every case
+`2^41 |q'| + 2^62 |r'| ≤ 2^62 · 2^{j+1} − 2^62 + 2^41`. ∎
+
 **Lemma 7 (unpacking).** From `w_f^{(k)}`, with
 `t = −w_f^{(k)} = 2^{41−k} u_k + 2^{62−k} v_k − φ_k` and `|φ_k| < 2^20 ≤ 2^{40−k}`:
 `⌊(t + 2^{40−k}) / 2^{41−k}⌋ = u_k + 2^21 v_k` exactly, and then
