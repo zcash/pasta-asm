@@ -103,6 +103,11 @@ blocks are the ones that run, and the crate documentation's example runs on its 
 `pasta_curves` tests the backend against its portable arithmetic when its `aarch64-asm` feature
 is enabled. `scripts/ci.sh` runs every check CI runs.
 
+`cargo bench` times the inversion per call on a thousand random inputs, with the multiplication
+and the squaring for scale where the crate has a Montgomery backend; run with
+`RUSTFLAGS='--cfg pasta_asm_disable'` it times the portable blocks on the same inputs. The
+harness, Criterion, is the crate's only dependency, and a development one.
+
 ## Formal verification
 
 `lean/` holds a Lean 4 development that models the routines formally and contributes to

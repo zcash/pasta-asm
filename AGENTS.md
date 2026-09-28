@@ -52,6 +52,7 @@ cargo test                # the tests, with the debug assertions they check
 cargo test --release      # the same tests on the release code
 cargo clippy --all-targets -- -D warnings
 cargo fmt -- --check
+cargo bench               # the inversion per call; with RUSTFLAGS='--cfg pasta_asm_disable', the portable blocks
 ```
 
 `scripts/ci.sh` runs every check CI runs, these and the formalization's, in one go; a check
