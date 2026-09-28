@@ -12,6 +12,7 @@ import PastaAsm.AArch64.Spec.Amontred
 import PastaAsm.AArch64.Spec.SignMag
 import PastaAsm.AArch64.Spec.UvRow
 import PastaAsm.AArch64.Spec.FgRow
+import PastaAsm.AArch64.Spec.Divstep
 
 /-!
 # Correctness of the transcribed Pasta Montgomery blocks
