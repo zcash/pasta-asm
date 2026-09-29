@@ -18,3 +18,11 @@ targets = []
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pasta_asm_disable)'] }
 
 [dependencies]
+
+# The benchmark's harness only; the crate ships with no dependencies, which CI asserts.
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "invert"
+harness = false

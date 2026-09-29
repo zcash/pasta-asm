@@ -4,11 +4,12 @@
 > It provides project context and contribution policies.
 
 This crate provides assembly backends for the Pasta field arithmetic of `pasta_curves`. It
-contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring,
-and modular addition and subtraction, as inline `asm!` blocks, and a repeated-squaring chain and
-conversion out of Montgomery form composed from them; and, on AArch64, a constant-time inversion
-composed from six more blocks. It is low-level cryptographic code. Our priorities are
-**correctness, constant-time behaviour, and performance**, in that order.
+contains an AArch64 backend and an x86-64 backend: Montgomery multiplication and squaring, and
+modular addition and subtraction, as inline `asm!` blocks, and a repeated-squaring chain and
+conversion out of Montgomery form composed from them; and a constant-time inversion composed
+from six more blocks, in AArch64 assembly or, on every other target, in portable Rust. It is
+low-level cryptographic code. Our priorities are **correctness, constant-time behaviour, and
+performance**, in that order.
 
 The Montgomery routines are transcriptions of Supranational's Semolina v0.1.4, and the
 inversion's blocks are adapted from s2n-bignum's `bignum_montinv_p256` (see `README.md`). The
@@ -51,15 +52,18 @@ cargo test                # the tests, with the debug assertions they check
 cargo test --release      # the same tests on the release code
 cargo clippy --all-targets -- -D warnings
 cargo fmt -- --check
+cargo bench               # the inversion per call; with RUSTFLAGS='--cfg pasta_asm_disable', the portable blocks
 ```
 
 `scripts/ci.sh` runs every check CI runs, these and the formalization's, in one go; a check
 whose tool is not installed is skipped with a note on how to install it.
 
-On any other target, `cargo build` and `cargo test` must still succeed, with nothing to test:
-that is what keeps a consumer's optional dependency harmless off AArch64. A cfg-gated
-test that compiles out still reports success, so CI counts the `#[test]` functions in the
-source and requires the run to report exactly that many passed, in both profiles.
+On any other target, `cargo build` and `cargo test` must still succeed, with only the
+inversion's tests over the portable blocks to run: that is what keeps a consumer's optional
+dependency harmless off AArch64. A cfg-gated test that compiles out still reports success, so
+CI counts the `#[test]` functions in the source and requires the run to report exactly that
+many passed, in both profiles: all of them where the crate has a backend, and those of the
+always-compiled modules elsewhere.
 
 Documentation is a synthetic cross-platform build: `cfg(doc)` retains APIs that are unavailable
 on the rustdoc host, while `doc(cfg(...))` renders their real architecture requirements. Because

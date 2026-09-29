@@ -53,13 +53,15 @@ for profile in "" --release; do
   fi
 done
 
-step "with the assembly disabled, the unit tests compile out and the doc example still passes"
+step "with the assembly disabled, only the portable modules' tests run, and the doc example passes"
 disable=(env RUSTFLAGS="--cfg pasta_asm_disable" RUSTDOCFLAGS="--cfg pasta_asm_disable")
 "${disable[@]}" cargo build
+portable=$(grep -rh '^\s*#\[test\]' src/inversion.rs src/limbs.rs src/portable.rs | wc -l | tr -d ' ')
+test "$portable" -gt 0
 for profile in "" --release; do
   out=$("${disable[@]}" cargo test --lib $profile 2>&1) || { echo "$out"; exit 1; }
-  echo "$out" | grep -q '^test result: ok. 0 passed' ||
-    { echo "$out"; echo "unit tests ran with the assembly disabled"; exit 1; }
+  echo "$out" | grep -q "^test result: ok. $portable passed" ||
+    { echo "$out"; echo "expected exactly the $portable tests of the portable modules"; exit 1; }
 done
 "${disable[@]}" cargo test --doc
 

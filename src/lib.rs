@@ -19,11 +19,11 @@
 //! Broadwell / AMD Zen or newer); neither is checked. `from_mont` uses MULX
 //! (BMI2) alone. Apple x86-64 targets are excluded altogether: they reserve
 //! `rbp`, and so have fewer available registers than the squaring blocks
-//! need. The constant-time inversion, [`invert`], is provided on AArch64.
+//! need.
 //!
 //! On every other target, that is any target other than AArch64 and
-//! non-Apple x86-64 with 64-bit pointers, the crate is empty. It is also
-//! empty, on any target, when the compiler is passed
+//! non-Apple x86-64 with 64-bit pointers, the crate has no Montgomery
+//! backend. Nor has it one, on any target, when the compiler is passed
 //! `--cfg pasta_asm_disable` (through `RUSTFLAGS`, or `rustflags` in
 //! `.cargo/config.toml`), which is how to build for old x86-64 CPUs without
 //! BMI2 and ADX. A consumer does not repeat these conditions: it declares
@@ -31,6 +31,10 @@
 //! under [`if_unsupported!`]; the first expands to its items exactly where
 //! the crate has a backend, and the second exactly where it does not.
 //! [`BACKEND`] names the result.
+//!
+//! The constant-time inversion, [`invert`], is provided on every target and
+//! under `pasta_asm_disable` too: by assembly blocks on AArch64 with the
+//! assembly enabled, and by the same blocks in portable Rust otherwise.
 //!
 //! ```
 //! mod portable {
@@ -160,9 +164,28 @@ macro_rules! if_unsupported {
     )* };
 }
 
+// The tests use std only to catch the debug assertions they check, so a release test build
+// stays free of it.
+#[cfg(all(test, debug_assertions))]
+extern crate std;
+
+mod inversion;
+mod limbs;
+
+// The portable blocks serve wherever the assembly blocks do not; on AArch64 with the assembly
+// enabled they are compiled for their tests and the documentation only.
+#[cfg(any(not(all(target_arch = "aarch64", not(pasta_asm_disable))), test, doc))]
+mod portable;
+
+#[cfg(test)]
+mod test_fields;
+
+pub use inversion::invert;
+pub use limbs::Limbs;
+
 if_supported! {
-    /// The backend in use, for diagnostics: `"aarch64"` or `"x86-64"` where the crate has one,
-    /// and `"portable"` where it is empty and a consumer's fallback applies.
+    /// The Montgomery backend in use, for diagnostics: `"aarch64"` or `"x86-64"` where the crate
+    /// has one, and `"portable"` where it has none and a consumer's fallback applies.
     pub const BACKEND: &str = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86-64" };
 
     #[cfg(any(target_arch = "aarch64", doc))]
@@ -170,14 +193,6 @@ if_supported! {
 
     #[cfg(any(target_arch = "x86_64", doc))]
     mod x86_64;
-
-    #[cfg(any(target_arch = "aarch64", doc))]
-    mod inversion;
-
-    // The tests use std only to catch the debug assertions they check, so a release test
-    // build stays free of it.
-    #[cfg(all(test, debug_assertions))]
-    extern crate std;
 
     #[cfg(test)]
     mod tests;
@@ -187,7 +202,7 @@ if_supported! {
 }
 
 if_unsupported! {
-    /// The backend in use, for diagnostics: `"aarch64"` or `"x86-64"` where the crate has one,
-    /// and `"portable"` where it is empty and a consumer's fallback applies.
+    /// The Montgomery backend in use, for diagnostics: `"aarch64"` or `"x86-64"` where the crate
+    /// has one, and `"portable"` where it has none and a consumer's fallback applies.
     pub const BACKEND: &str = "portable";
 }
